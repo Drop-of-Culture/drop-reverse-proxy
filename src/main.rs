@@ -18,7 +18,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(conf.bind_addr()).await.unwrap();
     let token_repo = InMemoryTokenRepo::default();
     let tag_repo = InMemoryTagRepo::default();
-    ["jdznjevb", "xurnxenyoawltkky", "tag3"].iter()
+    ["jdznjevb", "xurnxenyoawltkky", "tag3", "playlist"].iter()
         .for_each(|t| tag_repo.save(&Tag::new(t.to_string(), NaiveDateTime::default())));
     let ip_repo = InMemoryIpRepo::default();
     //tag_repo.save(&drop_reverse_proxy::Tag::new("tag1".to_string(), chrono::NaiveDateTime::default()));

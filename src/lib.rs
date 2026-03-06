@@ -1,3 +1,6 @@
+use crate::repository::artist::Artist;
+use crate::repository::playlist::Playlist;
+use crate::repository::{Repo, RepoByName};
 use crate::service::drop::DropService;
 use crate::service::DropServiceT;
 use axum::extract::{ConnectInfo, Path, Request, State};
@@ -6,7 +9,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use chrono::NaiveDateTime;
 use derive_new::new;
 use figment::providers::{Format, Toml};
@@ -25,10 +28,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tar::Archive;
+use toml::de::Error;
 use uuid::Uuid;
-use crate::repository::artist::Artist;
-use crate::repository::playlist::Playlist;
-use crate::repository::{Repo, RepoByName};
 
 pub const TOKEN_NAME: &str = "dop_token";
 pub const TAG_ARCHIVE_PREFIX: &str = "drop_";
@@ -44,8 +45,20 @@ pub fn app(state: AppState) -> Router {
             get(tag).route_layer(axum::middleware::from_fn_with_state(state.clone(), tag_guard)),
         )
         .route(
+            "/playlist",
+            get(playlist).route_layer(axum::middleware::from_fn_with_state(state.clone(), token_guard))
+        )
+        .route(
             "/play",
             get(play).route_layer(axum::middleware::from_fn_with_state(state.clone(), token_guard))
+        )
+        .route(
+            "/track/part/{file}",
+            get(track_part).route_layer(axum::middleware::from_fn_with_state(state.clone(), token_guard))
+        )
+        .route(
+            "/track/{track_number}",
+            get(track).route_layer(axum::middleware::from_fn_with_state(state.clone(), token_guard))
         )
         .route(
             "/{*path}",
@@ -63,12 +76,13 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 enum AppError {
     TagNotFound,
     Unauthorized,
     InternalError,
-    ResourceNotFound
+    ResourceNotFound,
+    PlaylistNotFound
 }
 
 impl IntoResponse for AppError {
@@ -78,7 +92,8 @@ impl IntoResponse for AppError {
             AppError::TagNotFound => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             AppError::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             AppError::InternalError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            AppError::ResourceNotFound => StatusCode::NOT_FOUND.into_response()
+            AppError::ResourceNotFound => StatusCode::NOT_FOUND.into_response(),
+            AppError::PlaylistNotFound => StatusCode::NOT_FOUND.into_response(),
         }
     }
 }
@@ -437,6 +452,50 @@ async fn play(
     Ok(StatusCode::UNAUTHORIZED.into_response())
 }
 
+async fn track(
+    Path(track_number): Path<u8>,
+    State(state): State<AppState>,
+    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Result<Response, AppError> {
+    let headers = req.headers().clone();
+    if let Some(header_token) = headers.get(TOKEN_NAME) {
+        if let Ok(token_str) = header_token.to_str() {
+            if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
+                let token_opt = state.token_repo.get_token(token_uuid_requested);
+                if let Some(token) = token_opt {
+                    let mut uri_new = String::from(state.conf.redirect_uri);
+                    uri_new.push_str("/tag/");
+                    uri_new.push_str(&token.tag);
+                    uri_new.push_str("/playlist_");
+                    uri_new.push_str(&track_number.to_string());
+                    uri_new.push_str(".m3u8");
+                    println!("calling {uri_new}");
+                    return match reqwest::get(uri_new).await {
+                        Ok(resp) => {
+                            Ok(resp.bytes().await.unwrap().into_response())
+                        },
+                        Err(_) => {
+                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+                            Err(AppError::TagNotFound)
+                        },
+                    }
+                }
+            }
+        }
+    }
+    Ok(StatusCode::UNAUTHORIZED.into_response())
+}
+
+async fn track_part(
+    Path(track_part): Path<String>,
+    State(state): State<AppState>,
+    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Result<Response, AppError> {
+    file(State(state), ConnectInfo(connect_info), Path(track_part), req).await
+}
+
 async fn file(
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
@@ -473,6 +532,35 @@ async fn file(
         }
     }
     Ok(StatusCode::UNAUTHORIZED.into_response())
+}
+
+async fn playlist(
+    State(state): State<AppState>,
+    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Response {
+    let headers = req.headers().clone();
+    if let Some(header_token) = headers.get(TOKEN_NAME)
+        && let Ok(token_str) = header_token.to_str()
+        && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
+        && let Some(token) = state.token_repo.get_token(token_uuid_requested) {
+
+        let mut uri_new = String::from(&state.conf.redirect_uri);
+        uri_new.push_str("/tag/");
+        uri_new.push_str(&token.tag);
+        uri_new.push_str("/playlist.toml");
+        println!("checking if there is playlist info at uri: {uri_new}");
+        return if let Ok(resp) = reqwest::get(uri_new).await
+            && let Ok(text) = resp.text().await
+            && text.len() > 0
+            && let Ok(playlist_data) = PlaylistData::create_from_toml_text(text.as_str()) {
+            Json(playlist_data).into_response()
+        } else {
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+            AppError::PlaylistNotFound.into_response()
+        }
+    }
+    AppError::Unauthorized.into_response()
 }
 
 pub trait TokenRepo: Send + Sync {
@@ -884,5 +972,27 @@ impl DbConf {
 
     pub fn db_timeout(&self) -> u64 {
         self.db_timeout
+    }
+}
+
+#[derive(Clone, Deserialize, new, Debug, Serialize)]
+pub struct PlaylistData {
+    artist_name: String,
+    playlist_name: String,
+    tracks: Vec<String>
+}
+
+impl PlaylistData {
+    pub fn artist_name(&self) -> &str {
+        &self.artist_name
+    }
+    pub fn playlist_name(&self) -> &str {
+        &self.playlist_name
+    }
+    pub fn tracks(&self) -> &Vec<String> {
+        &self.tracks
+    }
+    pub fn create_from_toml_text(toml_text: &str) -> Result<PlaylistData, Error> {
+        toml::from_str(toml_text)
     }
 }

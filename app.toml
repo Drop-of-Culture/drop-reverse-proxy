@@ -1,7 +1,7 @@
 redirect_uri = 'http://localhost:8084'
 bind_addr = '127.0.0.1:8000'
 max_attempts = 10
-tags = ['jdznjevb', 'xurnxenyoawltkky', 'tag3']
+tags = ['jdznjevb', 'xurnxenyoawltkky', 'tag3', 'playlist']
 import_path = "./import"
 
 [db_conf]
