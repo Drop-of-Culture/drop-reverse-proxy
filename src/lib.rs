@@ -143,7 +143,7 @@ async fn tag(
             tag: tag_extracted.clone(),
         });
 
-        let mut uri_new = String::from(state.conf.redirect_uri);
+        let mut uri_new = state.conf.redirect_uri;
         uri_new.push_str("/tag/");
         uri_new.push_str(&tag_extracted);
         uri_new.push_str("/index.html");
