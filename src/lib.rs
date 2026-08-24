@@ -193,7 +193,7 @@ async fn drop_import(
     let files_to_import = look_for_drop_files_at_path(&path);
     if files_to_import.is_empty() {
         println!("no files to import at import path");
-        let response = Response::builder()
+        let _response = Response::builder()
             .status(StatusCode::OK)
             .body("{imported: 0}");
         return Ok(StatusCode::OK.into_response());
