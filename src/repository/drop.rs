@@ -8,7 +8,9 @@ use sqlx::{Pool, Postgres};
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Drop {
     id: i32,
+    // TODO remove artist_id : the art_work has an artist, not the drop
     artist_id: i32,
+    // TODO remove type_id : the art_work has a type, not the drop
     type_id: i16,
     artwork_id: i32,
 }
