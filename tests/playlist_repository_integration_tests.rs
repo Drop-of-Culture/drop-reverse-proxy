@@ -28,7 +28,10 @@ async fn test_playlist_repo_integration() {
         r#"
         CREATE TABLE "playlist" (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL
+            drop_id INTEGER NOT NULL,
+            create_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            name CHARACTER(255) NOT NULL
         )
         "#
     )
@@ -41,8 +44,12 @@ async fn test_playlist_repo_integration() {
         .expect("Failed to create playlist repository");
 
     // 4. Test save_or_update
+    let now = chrono::Utc::now();
     let new_playlist = Playlist {
         id: 0,
+        drop_id: 1,
+        create_date: now,
+        update_date: now,
         name: "Test Playlist".to_string(),
     };
 
@@ -51,6 +58,7 @@ async fn test_playlist_repo_integration() {
     // 5. Test get
     let saved_playlist = <PlaylistRepo as Repo<Playlist>>::get(&repo, 1).await.expect("Failed to get playlist");
     
-    assert_eq!(saved_playlist.name, "Test Playlist");
+    assert_eq!(saved_playlist.name.trim_end(), "Test Playlist");
     assert_eq!(saved_playlist.id, 1);
+    assert_eq!(saved_playlist.drop_id, 1);
 }

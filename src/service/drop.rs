@@ -169,17 +169,18 @@ where
                 .or(Err(ImportError::CantCreateArtistFromArtistName))?.id();
         }
 
-        // create playlist
-        let playlist_id = self.playlist_repository
-            .save_or_update(&Playlist::new(0, drop_request.playlist_name))
-            .await
-            .or(Err(ImportError::CantCreatePlaylistFromPlaylistName))?;
-
         // create drop
-        self.drop_repository
-            .save_or_update(&Drop::new(0, drop_artist_id, 0, playlist_id))
+        let drop_id = self.drop_repository
+            .save_or_update(&Drop::new(0, drop_artist_id, 0, 0))
             .await
             .or(Err(ImportError::CantCreateDropFromDropRequest))?;
+
+        // create playlist
+        let now = chrono::Utc::now();
+        let playlist_id = self.playlist_repository
+            .save_or_update(&Playlist::new(0, drop_id, now, now, drop_request.playlist_name))
+            .await
+            .or(Err(ImportError::CantCreatePlaylistFromPlaylistName))?;
 
         // create playlist directory in web server
         let mut playlist_dir_path = web_server_path.clone();

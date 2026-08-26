@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use crate::config::db::{create_pool, DatabaseConfig};
 use crate::repository::{Entity, Repo, RepositoryError};
 use derive_new::new;
@@ -8,12 +9,31 @@ use sqlx::{Pool, Postgres};
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Playlist {
     pub id: i32,
+    pub drop_id: i32,
+    pub create_date: DateTime<Utc>,
+    pub update_date: DateTime<Utc>,
     pub name: String,
 }
 
 impl Playlist {
     pub fn id(&self) -> i32 {
         self.id
+    }
+
+    pub fn drop_id(&self) -> i32 {
+        self.drop_id
+    }
+
+    pub fn create_date(&self) -> &DateTime<Utc> {
+        &self.create_date
+    }
+
+    pub fn update_date(&self) -> &DateTime<Utc> {
+        &self.update_date
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -41,7 +61,7 @@ impl PlaylistRepo {
 impl Repo<Playlist> for PlaylistRepo {
     async fn get(&self, id: i32) -> Result<Playlist, RepositoryError> {
         sqlx::query_as::<_, Playlist>("
-SELECT id, name
+SELECT id, drop_id, create_date, update_date, name
 FROM \"playlist\"
 WHERE id = $1
 LIMIT 1
@@ -54,10 +74,11 @@ LIMIT 1
 
     async fn save_or_update(&self, playlist: &Playlist) -> Result<i32, RepositoryError> {
         sqlx::query_scalar::<_, i32>("
-INSERT INTO \"playlist\" (name)
-VALUES ($1)
+INSERT INTO \"playlist\" (drop_id, name)
+VALUES ($1, $2)
 RETURNING id
     ")
+            .bind(playlist.drop_id)
             .bind(playlist.name.clone())
             .fetch_one(&self.pool)
             .await

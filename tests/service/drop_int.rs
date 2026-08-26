@@ -44,7 +44,10 @@ async fn setup_db() -> (drop_reverse_proxy::config::db::DatabaseConfig, Containe
         r#"
         CREATE TABLE "playlist" (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL
+            drop_id INTEGER NOT NULL,
+            create_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            update_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            name CHARACTER(255) NOT NULL
         )
         "#
     )
