@@ -4,6 +4,7 @@ use std::sync::Arc;
 pub mod drop;
 pub mod artist;
 pub mod playlist;
+pub mod artwork;
 pub mod tag;
 
 pub trait Entity {

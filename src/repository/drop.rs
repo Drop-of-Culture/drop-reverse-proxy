@@ -8,11 +8,8 @@ use sqlx::{Pool, Postgres};
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Drop {
     id: i32,
-    // TODO remove artist_id : the art_work has an artist, not the drop
-    artist_id: i32,
-    // TODO remove type_id : the art_work has a type, not the drop
-    type_id: i16,
     artwork_id: i32,
+    name: String,
 }
 
 impl Drop {
@@ -20,16 +17,12 @@ impl Drop {
         self.id
     }
 
-    pub fn artist_id(&self) -> i32 {
-        self.artist_id
-    }
-
-    pub fn type_id(&self) -> i16 {
-        self.type_id
-    }
-
     pub fn artwork_id(&self) -> i32 {
         self.artwork_id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -66,7 +59,7 @@ impl DropRepo {
 impl Repo<Drop> for DropRepo {
     async fn get(&self, id: i32) -> Result<Drop, RepositoryError> {
         sqlx::query_as::<_, Drop>("
-SELECT id, artist_id, type_id, artwork_id
+SELECT id, artwork_id, name
 FROM \"drop\"
 WHERE id = $1
 LIMIT 1
@@ -84,13 +77,12 @@ LIMIT 1
 
     async fn save_or_update(&self, drop: &Drop) -> Result<i32, RepositoryError> {
         sqlx::query_scalar::<_, i32>("
-INSERT INTO \"drop\" (artist_id, artwork_id, type_id)
-VALUES ($1, $2, $3)
+INSERT INTO \"drop\" (artwork_id, name)
+VALUES ($1, $2)
 RETURNING id
     ")
-            .bind(drop.artist_id)
             .bind(drop.artwork_id)
-            .bind(drop.type_id)
+            .bind(drop.name.clone())
             .fetch_one(&self.pool)
             .await
             .map_err(|_| RepositoryError::EntityNotSaved)

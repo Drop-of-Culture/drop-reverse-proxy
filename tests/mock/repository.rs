@@ -4,3 +4,5 @@ pub mod drop;
 pub mod playlist;
 #[path = "repository/artist.rs"]
 pub mod artist;
+#[path = "repository/artwork.rs"]
+pub mod artwork;

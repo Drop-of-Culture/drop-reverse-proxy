@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use drop_reverse_proxy::repository::{Repo, RepoByName};
 use drop_reverse_proxy::repository::artist::ArtistRepo;
-use drop_reverse_proxy::repository::playlist::PlaylistRepo;
+use drop_reverse_proxy::repository::artwork::ArtworkRepo;
 
 #[tokio::main]
 async fn main() {
@@ -38,14 +38,14 @@ async fn main() {
     };
 
     if let Ok(drop_repository) = DropRepo::new(&db_config).await
-        && let Ok(playlist_repository) = PlaylistRepo::new(&db_config).await
+        && let Ok(artwork_repository) = ArtworkRepo::new(&db_config).await
         && let Ok(artist_repository) = ArtistRepo::new(&db_config).await {
         println!("Database connection successful");
 
         let drop_service = DropService::new(
             Arc::new(drop_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::drop::Drop>>,
             Arc::new(artist_repository) as Arc<dyn RepoByName<drop_reverse_proxy::repository::artist::Artist>>,
-            Arc::new(playlist_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::playlist::Playlist>>,
+            Arc::new(artwork_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::artwork::Artwork>>,
         );
         let app_state = AppState {
             token_repo: Arc::new(token_repo.clone()),

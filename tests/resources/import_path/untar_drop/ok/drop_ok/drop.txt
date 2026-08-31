@@ -1,5 +1,5 @@
 artist_name = "Cool Rasta"
-playlist_name = "Rasta's playlist"
+artwork_name = "Rasta's playlist"
 tracks = [
 "track001.mp3",
 "track002.mp3",

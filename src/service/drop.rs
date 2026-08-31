@@ -1,14 +1,14 @@
 use crate::repository::artist::Artist;
 use crate::repository::drop::Drop;
-use crate::repository::playlist::Playlist;
 use crate::repository::{Repo, RepoByName};
 pub use crate::service::DropServiceT;
 use async_trait::async_trait;
+use derive_new::new;
 use serde::Deserialize;
 use std::fs;
-use derive_new::new;
+use crate::repository::artwork::Artwork;
 
-pub const PLAYLIST_DIR_PREFIX: &str = "playlist_";
+pub const ARTWORK_DIR_PREFIX: &str = "artwork_";
 pub const TRACK_FILE_PREFIX: &str = "track_";
 
 #[derive(Debug)]
@@ -28,19 +28,21 @@ pub enum ImportError {
     InvalidArtistId,
     DropRepositoryIsNone,
     ArtistRepositoryIsNone,
-    PlaylistRepositoryIsNone,
+    ArtworkRepositoryIsNone,
     CantCreateArtistFromArtistName,
     CantCreateDropFromDropRequest,
-    CantCreatePlaylistFromPlaylistName,
-    CantCreatPlaylistDirectoryInWebServer,
-    CantCopyTrackFileToPlaylistDirectory,
+    CantCreateArtworkFromArtworkName,
+    CantCreateArtworkDirectoryInWebServer,
+    CantCopyTrackFileToArtworkDirectory,
+    NeitherArtistIdNorArtistNamePresent,
+    CantFindArtistInRepository,
 }
 
 #[derive(Clone, Deserialize, new)]
 pub struct DropRequest {
     artist_id: Option<i32>,
     artist_name: Option<String>,
-    playlist_name: String,
+    artwork_name: String,
     tracks: Vec<String>
 }
 
@@ -53,8 +55,8 @@ impl DropRequest {
         &self.artist_name
     }
 
-    pub fn playlist_name(&self) -> &str {
-        &self.playlist_name
+    pub fn artwork_name(&self) -> &str {
+        &self.artwork_name
     }
 
     pub fn tracks(&self) -> &Vec<String> {
@@ -67,23 +69,23 @@ pub struct DropService<T, U, V>
 where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
-    V: Repo<Playlist> + Send + Sync,
+    V: Repo<Artwork> + Send + Sync,
 {
     drop_repository: T,
     artist_repository: U,
-    playlist_repository: V,
+    artwork_repository: V,
 }
 
 impl<T, U, V> Clone for DropService<T, U, V>
 where
     T: Repo<Drop> + Send + Sync + Clone,
     U: RepoByName<Artist> + Send + Sync + Clone,
-    V: Repo<Playlist> + Send + Sync + Clone, {
+    V: Repo<Artwork> + Send + Sync + Clone, {
     fn clone(&self) -> Self {
         DropService::new(
             self.drop_repository.clone(),
             self.artist_repository.clone(),
-            self.playlist_repository.clone()
+            self.artwork_repository.clone()
         )
     }
 }
@@ -92,12 +94,12 @@ impl<T, U, V> DropService<T, U, V>
 where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
-    V: Repo<Playlist> + Send + Sync,
+    V: Repo<Artwork> + Send + Sync,
 {
     pub fn new(
         drop_repository: T,
         artist_repository: U,
-        playlist_repository: V,
+        artwork_repository: V,
     ) -> DropService<T, U, V>
     where
         T: Sized,
@@ -112,15 +114,15 @@ where
             println!("artist repository not set, can't create drop");
             return Err(ImportError::ArtistRepositoryIsNone)
         }
-        if playlist_repository.is_none() {
-            println!("playlist repository not set, can't create drop");
-            return Err(ImportError::PlaylistRepositoryIsNone)
+        if artwork_repository.is_none() {
+            println!("artwork repository not set, can't create drop");
+            return Err(ImportError::ArtworkRepositoryIsNone)
         }*/
 
         Self {
             drop_repository,
             artist_repository,
-            playlist_repository,
+            artwork_repository,
         }
     }
 
@@ -132,8 +134,8 @@ where
         &self.artist_repository
     }
 
-    pub fn playlist_repository(&self) -> &V {
-        &self.playlist_repository
+    pub fn artwork_repository(&self) -> &V {
+        &self.artwork_repository
     }
 }
 
@@ -142,7 +144,7 @@ impl<T, U, V> DropServiceT for DropService<T, U, V>
 where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
-    V: Repo<Playlist> + Send + Sync,
+    V: Repo<Artwork> + Send + Sync,
 {
     async fn create_drop(
         &self,
@@ -153,53 +155,56 @@ where
 
         // artist_id XOR artist_name
         if drop_request.artist_id.is_some() && drop_request.artist_name.is_some() {
-            return Err(ImportError::ArtistIdAndArtistNameAreBothPresent)
+            return Err(ImportError::ArtistIdAndArtistNameAreBothPresent);
         }
-        let mut drop_artist_id = 0;
-        // artist_id exists
-        if let Some(artist_id) = drop_request.artist_id {
+        if drop_request.artist_id.is_none() && drop_request.artist_name.is_none() {
+            return Err(ImportError::NeitherArtistIdNorArtistNamePresent);
+        }
+        let artist = if let Some(artist_id) = drop_request.artist_id {
             // check artist_id exists
-            drop_artist_id = self.artist_repository.get(artist_id)
+            self.artist_repository.get(artist_id)
                 .await
-                .or(Err(ImportError::InvalidArtistId))?.id();
+                .or(Err(ImportError::InvalidArtistId))?
         } else if let Some(artist_name) = drop_request.artist_name {
             // check artist_name exists
-            drop_artist_id = self.artist_repository.get_by_name(&artist_name)
+            self.artist_repository.get_by_name(&artist_name)
                 .await
-                .or(Err(ImportError::CantCreateArtistFromArtistName))?.id();
-        }
+                .or(Err(ImportError::CantCreateArtistFromArtistName))?
+        } else {
+            return Err(ImportError::NeitherArtistIdNorArtistNamePresent);
+        };
+
+        // create artwork
+        let now = chrono::Utc::now();
+        let artwork_id = self.artwork_repository
+            .save_or_update(&Artwork::new(0, artist.id(), now, now, drop_request.artwork_name))
+            .await
+            .or(Err(ImportError::CantCreateArtworkFromArtworkName))?;
 
         // create drop
-        let drop_id = self.drop_repository
-            .save_or_update(&Drop::new(0, drop_artist_id, 0, 0))
+        let _drop_id = self.drop_repository
+            .save_or_update(&Drop::new(0, artwork_id, artist.name().to_string()))
             .await
             .or(Err(ImportError::CantCreateDropFromDropRequest))?;
 
-        // create playlist
-        let now = chrono::Utc::now();
-        let playlist_id = self.playlist_repository
-            .save_or_update(&Playlist::new(0, drop_id, now, now, drop_request.playlist_name))
-            .await
-            .or(Err(ImportError::CantCreatePlaylistFromPlaylistName))?;
-
-        // create playlist directory in web server
-        let mut playlist_dir_path = web_server_path.clone();
-        playlist_dir_path.push_str("/");
-        playlist_dir_path.push_str(PLAYLIST_DIR_PREFIX);
-        playlist_dir_path.push_str(&playlist_id.to_string());
-        fs::create_dir(&playlist_dir_path).or(Err(ImportError::CantCreatePlaylistFromPlaylistName))?;
+        // create artwork directory in web server
+        let mut artwork_dir_path = web_server_path.clone();
+        artwork_dir_path.push_str("/");
+        artwork_dir_path.push_str(ARTWORK_DIR_PREFIX);
+        artwork_dir_path.push_str(&artwork_id.to_string());
+        fs::create_dir(&artwork_dir_path).or(Err(ImportError::CantCreateArtworkDirectoryInWebServer))?;
         // move the files
         let mut i = 1;
         for track in drop_request.tracks.iter() {
             let mut track_import_path = drop_import_path.clone();
             track_import_path.push_str("/");
             track_import_path.push_str(track);
-            let mut playlist_track_path = playlist_dir_path.clone();
-            playlist_track_path.push_str("/");
-            playlist_track_path.push_str(TRACK_FILE_PREFIX);
-            playlist_track_path.push_str(&i.to_string());
-            fs::copy(track_import_path, playlist_track_path)
-                .or(Err(ImportError::CantCopyTrackFileToPlaylistDirectory))?;
+            let mut artwork_track_path = artwork_dir_path.clone();
+            artwork_track_path.push_str("/");
+            artwork_track_path.push_str(TRACK_FILE_PREFIX);
+            artwork_track_path.push_str(&i.to_string());
+            fs::copy(track_import_path, artwork_track_path)
+                .or(Err(ImportError::CantCopyTrackFileToArtworkDirectory))?;
             i += 1;
         }
         Ok(())

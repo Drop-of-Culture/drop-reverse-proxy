@@ -1,12 +1,13 @@
 use crate::mock::repository::artist::ArtistRepoMock;
+use crate::mock::repository::artwork::ArtworkRepoMock;
 use crate::mock::repository::drop::DropRepoMock;
 use crate::mock::repository::playlist::PlaylistRepoMock;
-use crate::utils::{init_apache_http2_container, DockerGuard};
+use crate::utils::{DockerGuard, init_apache_http2_container};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode};
 use chrono::NaiveDateTime;
 use drop_reverse_proxy::service::drop::DropService;
-use drop_reverse_proxy::{app, AppState, Conf, InMemoryIpRepo, InMemoryTagRepo, InMemoryTokenRepo, IpRepo, IpRepoDB, ServiceConf, Tag, TagRepo, TagRepoDB, Token, TokenRepo, TokenRepoDB, TOKEN_NAME};
+use drop_reverse_proxy::{AppState, Conf, InMemoryIpRepo, InMemoryTagRepo, InMemoryTokenRepo, IpRepo, IpRepoDB, ServiceConf, TOKEN_NAME, Tag, TagRepo, TagRepoDB, Token, TokenRepo, TokenRepoDB, app};
 use http_body_util::Empty;
 use regex::Regex;
 use reqwest::header::SET_COOKIE;
@@ -67,7 +68,7 @@ async fn get_tag() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new())
             )
         ),
     };
@@ -124,7 +125,7 @@ async fn get_tag_error() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -159,7 +160,7 @@ async fn tag_not_in_list_returns_500_and_no_token_header() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -198,7 +199,7 @@ async fn save_and_get_token_from_repo() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -347,7 +348,7 @@ async fn save_and_get_token_from_db() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -402,7 +403,7 @@ async fn get_tag_should_return_500_when_ip_max_attempts_reached() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -450,7 +451,7 @@ async fn get_play_is_authorized_token() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -488,7 +489,7 @@ async fn get_play_is_not_authorized_token() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),   
     };
@@ -523,7 +524,7 @@ async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header()
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -577,7 +578,7 @@ async fn get_play_is_authorized_token_and_ip_is_allowed() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -622,7 +623,7 @@ async fn get_play_is_authorized_token_and_ip_is_not_allowed() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -696,7 +697,7 @@ async fn get_play_is_not_authorized_token_when_no_token() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -730,7 +731,7 @@ async fn drop_import_ok() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };
@@ -763,7 +764,7 @@ async fn tag_import_returns_not_found_when_called_with_ip_not_accepted() {
             DropService::new(
                 Arc::new(DropRepoMock::new()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(PlaylistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
             )
         ),
     };

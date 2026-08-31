@@ -1,5 +1,5 @@
 use crate::repository::artist::Artist;
-use crate::repository::playlist::Playlist;
+use crate::repository::artwork::Artwork;
 use crate::repository::{Repo, RepoByName};
 use crate::service::drop::DropService;
 use crate::service::DropServiceT;
@@ -912,7 +912,7 @@ pub struct ServiceConf {
     drop_service: DropService<
         Arc<dyn Repo<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
-        Arc<dyn Repo<Playlist>>,
+        Arc<dyn Repo<Artwork>>,
     >,
 }
 
@@ -930,7 +930,7 @@ impl ServiceConf {
     ) -> &DropService<
         Arc<dyn Repo<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
-        Arc<dyn Repo<Playlist>>,
+        Arc<dyn Repo<Artwork>>,
     > {
         &self.drop_service
     }

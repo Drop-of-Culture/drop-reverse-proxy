@@ -50,8 +50,7 @@ mod tests {
         let drop = Drop::new(
             0,
             10,
-            1,
-            2
+            String::from("drop1"),
         );
         let save_result = drop_repo.save_or_update(&drop).await;
         assert!(save_result.is_ok());

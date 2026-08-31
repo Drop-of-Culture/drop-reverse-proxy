@@ -11,6 +11,7 @@ pub struct Tag {
     id: i32,
     name: String,
     create_date: NaiveDateTime,
+    drop_id: i32,
 }
 
 impl Tag {

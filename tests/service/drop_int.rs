@@ -1,8 +1,8 @@
-use drop_reverse_proxy::repository::artist::{Artist, ArtistRepo};
-use drop_reverse_proxy::repository::drop::DropRepo;
-use drop_reverse_proxy::repository::playlist::PlaylistRepo;
 use drop_reverse_proxy::repository::RepoByName;
-use drop_reverse_proxy::service::drop::{DropRequest, DropService, DropServiceT, PLAYLIST_DIR_PREFIX, TRACK_FILE_PREFIX};
+use drop_reverse_proxy::repository::artist::{Artist, ArtistRepo};
+use drop_reverse_proxy::repository::artwork::ArtworkRepo;
+use drop_reverse_proxy::repository::drop::DropRepo;
+use drop_reverse_proxy::service::drop::{ARTWORK_DIR_PREFIX, DropRequest, DropService, DropServiceT, TRACK_FILE_PREFIX};
 use std::fs;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -12,8 +12,8 @@ use testcontainers_modules::postgres::Postgres;
 #[path = "../utils.rs"]
 mod utils;
 
-use utils::{create_default_db_config, start_postgres_container};
 use utils::init_apache_http2_container;
+use utils::{create_default_db_config, start_postgres_container};
 
 async fn setup_db() -> (drop_reverse_proxy::config::db::DatabaseConfig, ContainerAsync<Postgres>) {
     let db_name = "drop_of_culture";
@@ -42,9 +42,9 @@ async fn setup_db() -> (drop_reverse_proxy::config::db::DatabaseConfig, Containe
 
     sqlx::query(
         r#"
-        CREATE TABLE "playlist" (
+        CREATE TABLE "artwork" (
             id SERIAL PRIMARY KEY,
-            drop_id INTEGER NOT NULL,
+            artist_id INTEGER NOT NULL,
             create_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
             name CHARACTER(255) NOT NULL
@@ -53,15 +53,14 @@ async fn setup_db() -> (drop_reverse_proxy::config::db::DatabaseConfig, Containe
     )
         .execute(&pool)
         .await
-        .expect("Failed to create playlist table");
+        .expect("Failed to create artwork table");
 
     sqlx::query(
         r#"
         CREATE TABLE "drop" (
             id SERIAL PRIMARY KEY,
-            artist_id INTEGER NOT NULL,
             artwork_id INTEGER NOT NULL,
-            type_id SMALLINT NOT NULL
+            name VARCHAR(255) NOT NULL
         )
         "#
     )
@@ -81,9 +80,9 @@ async fn test_create_drop_with_new_artist_name() {
 
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
-    let playlist_repo = Arc::new(PlaylistRepo::new(&db_config).await.unwrap());
+    let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo.clone(), playlist_repo);
+    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo);
 
     let temp_import_dir = TempDir::new().unwrap();
     let import_path = temp_import_dir.path().to_str().unwrap().to_string();
@@ -102,20 +101,20 @@ async fn test_create_drop_with_new_artist_name() {
     let drop_request = DropRequest::new(
         None,
         Some("New Artist".to_string()),
-        "My Playlist".to_string(),
+        "My Artwork".to_string(),
         vec!["track1.mp3".to_string(), "track2.mp3".to_string()]
     );
 
     service.create_drop(&import_path, drop_request, &web_server_path).await.expect("Failed to create drop");
 
     // Verify file system
-    // The playlist ID should be 1
-    let playlist_dir = temp_web_server_dir.path().join(format!("{}{}", PLAYLIST_DIR_PREFIX, 1));
-    assert!(playlist_dir.exists());
-    assert!(playlist_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 1)).exists());
-    assert!(playlist_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 2)).exists());
+    // The artwork ID should be 1
+    let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 0));
+    assert!(artwork_dir.exists());
+    assert!(artwork_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 1)).exists());
+    assert!(artwork_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 2)).exists());
 
-    assert_eq!(fs::read_to_string(playlist_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 1))).unwrap(), "fake mp3 content 1");
+    assert_eq!(fs::read_to_string(artwork_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 1))).unwrap(), "fake mp3 content 1");
 }
 
 #[tokio::test]
@@ -126,9 +125,9 @@ async fn test_create_drop_with_existing_artist_id() {
 
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
-    let playlist_repo = Arc::new(PlaylistRepo::new(&db_config).await.unwrap());
+    let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo.clone(), playlist_repo);
+    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo);
 
     let artist_id = artist_repo.save_or_update(&Artist::new(0, "Existing Artist".to_string())).await.unwrap();
 
@@ -148,8 +147,8 @@ async fn test_create_drop_with_existing_artist_id() {
 
     service.create_drop(&import_path, drop_request, &web_server_path).await.expect("Failed to create drop");
 
-    let playlist_dir = temp_web_server_dir.path().join(format!("{}{}", PLAYLIST_DIR_PREFIX, 1));
-    assert!(playlist_dir.exists());
+    let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 0));
+    assert!(artwork_dir.exists());
 }
 
 #[tokio::test]
@@ -158,9 +157,9 @@ async fn test_create_drop_error_both_id_and_name() {
 
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
-    let playlist_repo = Arc::new(PlaylistRepo::new(&db_config).await.unwrap());
+    let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo, playlist_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
 
     let drop_request = DropRequest::new(
         Some(1),
