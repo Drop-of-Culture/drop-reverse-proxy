@@ -80,3 +80,13 @@ pub async fn create_pool(config: &DatabaseConfig) -> Result<PgPool, sqlx::Error>
 
     Ok(pool)
 }
+
+/// Run pending migrations from the `migrations/` directory, creating any
+/// missing tables. Safe to call on every startup: already-applied
+/// migrations are skipped.
+pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    sqlx::migrate!("./migrations").run(pool).await?;
+    tracing::info!("Database migrations up to date");
+    println!("Database migrations up to date");
+    Ok(())
+}

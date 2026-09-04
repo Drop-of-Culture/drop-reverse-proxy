@@ -37,6 +37,14 @@ async fn main() {
         max_lifetime: Duration::from_secs(1800)
     };
 
+    let migration_pool = drop_reverse_proxy::config::db::create_pool(&db_config)
+        .await
+        .expect("can't connect to database to run migrations");
+    drop_reverse_proxy::config::db::run_migrations(&migration_pool)
+        .await
+        .expect("failed to run database migrations");
+    migration_pool.close().await;
+
     if let Ok(drop_repository) = DropRepo::new(&db_config).await
         && let Ok(artwork_repository) = ArtworkRepo::new(&db_config).await
         && let Ok(artist_repository) = ArtistRepo::new(&db_config).await {
