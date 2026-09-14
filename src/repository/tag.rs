@@ -46,12 +46,16 @@ impl TagRepo {
             Err(err) => Err(RepositoryError::DatabaseError(err))
         }
     }
+
+    pub fn from_pool(pool: Pool<Postgres>) -> Result<TagRepo, RepositoryError> {
+        Ok(Self { pool })
+    }
 }
 #[async_trait]
 impl RepoByName<Tag> for TagRepo {
     async fn get(&self, id: i32) -> Result<Tag, RepositoryError> {
         sqlx::query_as::<_, Tag>("
-SELECT id, name, create_date
+SELECT id, name, create_date, drop_id
 FROM \"tag\"
 WHERE id = $1
 LIMIT 1
@@ -64,12 +68,13 @@ LIMIT 1
 
     async fn save_or_update(&self, tag: &Tag) -> Result<i32, RepositoryError> {
         sqlx::query_scalar::<_, i32>("
-INSERT INTO \"tag\" (name, create_date)
-VALUES ($1, $2)
+INSERT INTO \"tag\" (name, create_date, drop_id)
+VALUES ($1, $2, $3)
 RETURNING id
     ")
             .bind(tag.name.clone())
             .bind(tag.create_date)
+            .bind(tag.drop_id)
             .fetch_one(&self.pool)
             .await
             .map_err(|_| RepositoryError::EntityNotSaved)
@@ -77,7 +82,7 @@ RETURNING id
 
     async fn get_by_name(&self, name: &str) -> Result<Tag, RepositoryError> {
         sqlx::query_as::<_, Tag>("
-SELECT id, name, create_date
+SELECT id, name, create_date, drop_id
 FROM \"tag\"
 WHERE name = $1
 LIMIT 1

@@ -1,6 +1,6 @@
 use crate::repository::artist::Artist;
 use crate::repository::artwork::Artwork;
-use crate::repository::{Repo, RepoByName};
+use crate::repository::{Repo, RepoByName, RepositoryError};
 use crate::service::drop::DropService;
 use crate::service::DropServiceT;
 use axum::extract::{ConnectInfo, Path, Request, State};
@@ -122,7 +122,7 @@ impl Serialize for Token {
 #[derive(Clone)]
 pub struct AppState {
     pub token_repo: Arc<dyn TokenRepo>,
-    pub tag_repo: Arc<dyn TagRepo>,
+    pub tag_repo: Arc<repository::tag::TagRepo>,
     pub ip_repo: Arc<dyn IpRepo>,
     pub conf: Conf,
     pub entity_repositories: Vec<RepoType>,
@@ -337,14 +337,13 @@ async fn tag_guard(
     // check if tag exists
     let path = req.uri().path();
     if let Some(tag) = extract_tag_from_path(path) {
-        if check_tag(tag.as_str(), state.tag_repo) {
-            state.ip_repo.save_or_update(&connect_info.ip(), 0);
-            return next.run(req).await;
+        if check_tag(tag.as_str(), state.tag_repo).await.is_ok() {
+                state.ip_repo.save_or_update(&connect_info.ip(), 0);
+                return next.run(req).await.into_response();
         } else {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo)
         }
     }
-
     AppError::TagNotFound.into_response()
 }
 
@@ -393,8 +392,8 @@ async fn token_guard(
     AppError::Unauthorized.into_response()
 }
 
-fn check_tag(tag: &str, tag_repo: Arc<dyn TagRepo>) -> bool {
-    tag_repo.get(tag.to_string()).is_some()
+async fn check_tag(tag: &str, tag_repo: Arc<repository::tag::TagRepo>) -> Result<crate::repository::tag::Tag, RepositoryError> {
+    tag_repo.get_by_name(tag).await
 }
 
 fn check_ip(ip_addr: IpAddr, ip_repo: &Arc<dyn IpRepo>, max_bad_attempts: u8) -> bool {

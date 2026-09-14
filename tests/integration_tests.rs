@@ -1,22 +1,26 @@
 use crate::mock::repository::artist::ArtistRepoMock;
 use crate::mock::repository::artwork::ArtworkRepoMock;
 use crate::mock::repository::drop::DropRepoMock;
-use crate::mock::repository::playlist::PlaylistRepoMock;
-use crate::utils::{DockerGuard, init_apache_http2_container};
+use crate::utils::{DockerGuard, create_default_db_config, init_apache_http2_container, start_postgres_container};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode};
 use chrono::NaiveDateTime;
+use drop_reverse_proxy::config::db::{create_pool, run_migrations};
+use drop_reverse_proxy::repository::tag::TagRepo;
 use drop_reverse_proxy::service::drop::DropService;
-use drop_reverse_proxy::{AppState, Conf, InMemoryIpRepo, InMemoryTagRepo, InMemoryTokenRepo, IpRepo, IpRepoDB, ServiceConf, TOKEN_NAME, Tag, TagRepo, TagRepoDB, Token, TokenRepo, TokenRepoDB, app};
+use drop_reverse_proxy::{AppState, Conf, InMemoryIpRepo, InMemoryTokenRepo, IpRepo, IpRepoDB, ServiceConf, TOKEN_NAME, Token, TokenRepo, TokenRepoDB, app};
 use http_body_util::Empty;
 use regex::Regex;
 use reqwest::header::SET_COOKIE;
+use sqlx::{Error, PgPool};
 use std::net::{IpAddr, SocketAddr};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
+use tokio::runtime::Runtime;
+use tokio::sync::OnceCell;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -24,33 +28,125 @@ mod mock;
 pub mod service;
 mod utils;
 
-fn init_in_memory_tag_repo() -> InMemoryTagRepo {
-    let tag_repo = InMemoryTagRepo::default();
-    ["tag1", "tag2", "tag3", "jdznjevb", "xurnxenyoawltkky"].iter()
-        .for_each(|t| tag_repo.save(&Tag::new(t.to_string(), NaiveDateTime::default())));
-    tag_repo
+// A single, process-lifetime Tokio runtime shared by every test in this
+// binary. sqlx's `PgPool` (see `PG_POOL` below) binds its connections to the
+// reactor of whichever runtime created them; running every DB-using test on
+// its own `#[tokio::test]` runtime meant that as soon as the test that
+// happened to *initialize* the shared pool finished (dropping its runtime),
+// every other test still using that pool from a different, live runtime
+// blew up with "A Tokio 1.x context was found, but it is being shutdown."
+// Driving all tests through this single runtime via `block_on` keeps the
+// pool's connections on the same runtime for the whole test run.
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+fn shared_runtime() -> &'static Runtime {
+    RUNTIME.get_or_init(|| Runtime::new().expect("failed to create shared test runtime"))
 }
 
-fn init_redis_tag_repo(redis_url: &String) -> Result<TagRepoDB, redis::RedisError> {
-    let tag_repo_db = TagRepoDB::new(redis_url)?;
-    tag_repo_db.save(&Tag::new("tag1".to_string(), NaiveDateTime::default()));
-    tag_repo_db.save(&Tag::new("tag2".to_string(), NaiveDateTime::default()));
-    tag_repo_db.save(&Tag::new("tag3".to_string(), NaiveDateTime::default()));
-    tag_repo_db.save(&Tag::new("jdznjevb".to_string(), NaiveDateTime::default()));
-    tag_repo_db.save(&Tag::new("xurnxenyoawltkky".to_string(), NaiveDateTime::default()));
-    Ok(tag_repo_db)
+// A single Postgres container + connection pool shared by every test in this
+// binary, started lazily on first use and kept alive for the whole test run
+// (the container guard is intentionally leaked instead of dropped).
+static PG_POOL: OnceCell<PgPool> = OnceCell::const_new();
+
+async fn shared_pg_pool() -> PgPool {
+    PG_POOL
+        .get_or_init(|| async {
+            let (container, host, port) = start_postgres_container("drop_of_culture_test", "doc", "doc")
+                .await
+                .expect("failed to start shared Postgres container for integration tests");
+            // Leak the guard so the container is not stopped after the first test.
+            Box::leak(Box::new(container));
+
+            let db_config = create_default_db_config(host, port, "drop_of_culture_test", "doc", "doc");
+            let pool = create_pool(&db_config)
+                .await
+                .expect("failed to create shared PgPool for integration tests");
+            run_migrations(&pool)
+                .await
+                .expect("failed to run migrations on shared test database");
+            pool
+        })
+        .await
+        .clone()
 }
 
-#[tokio::test]
-async fn get_tag() {
+async fn create_tag(pool: &PgPool, tag_name: &str, drop_id: i32) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"tag\" (name, create_date, drop_id)
+VALUES ($1, CURRENT_TIMESTAMP, $2)
+RETURNING id
+")
+        .bind(tag_name)
+        .bind(drop_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn create_drop(pool: &PgPool, drop_name: &str, artwork_id: i32) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"drop\" (name, artwork_id)
+VALUES ($1, $2)
+RETURNING id
+")
+        .bind(drop_name)
+        .bind(artwork_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn create_artwork(pool: &PgPool, artwork_name: &str, artist_id: i32) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"artwork\" (name, artist_id)
+VALUES ($1, $2)
+RETURNING id
+")
+        .bind(artwork_name)
+        .bind(artist_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn create_artist(pool: &PgPool, artist_name: &str) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"artist\" (name)
+VALUES ($1)
+RETURNING id
+    ")
+        .bind(artist_name.clone())
+        .fetch_one(pool)
+        .await
+}
+
+// Returns a `TagRepo` backed by the shared pool. Tests are responsible for
+// seeding any tag rows they need.
+async fn tag_repo() -> TagRepo {
+    let pool = shared_pg_pool().await;
+    TagRepo::from_pool(pool)
+        .expect("failed to build TagRepo from shared pool")
+}
+
+#[test]
+fn get_tag() {
+    shared_runtime().block_on(get_tag_impl());
+}
+
+async fn get_tag_impl() {
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = init_in_memory_tag_repo();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
+
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    let tag_name = "test_tag";
+    create_tag(pg_pool, &tag_name, drop_id).await.expect("error when creating tag");
+
     let conf = Conf::new(
-        base_url, 
+        base_url,
         String::from("127.0.0.1:8000"), 
         10, 
         Vec::new(), 
@@ -78,7 +174,7 @@ async fn get_tag() {
     // call it like any tower service, no need to run an HTTP server
 
     let mut req = Request::builder()
-        .uri("/tag/xurnxenyoawltkky")
+        .uri("/tag/test_tag")
         .body(Empty::new())
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127,0,0,1], 12345))));
@@ -109,10 +205,14 @@ fn check_token_in_header_map_is_present_and_uuid(header_map: &HeaderMap) -> Uuid
     token_as_uuid.unwrap()
 }
 
-#[tokio::test]
-async fn get_tag_error() {
+#[test]
+fn get_tag_error() {
+    shared_runtime().block_on(get_tag_error_impl());
+}
+
+async fn get_tag_error_impl() {
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -143,11 +243,15 @@ async fn get_tag_error() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-#[tokio::test]
-async fn tag_not_in_list_returns_500_and_no_token_header() {
+#[test]
+fn tag_not_in_list_returns_500_and_no_token_header() {
+    shared_runtime().block_on(tag_not_in_list_returns_500_and_no_token_header_impl());
+}
+
+async fn tag_not_in_list_returns_500_and_no_token_header_impl() {
     // Arrange: use in-memory repo
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -179,14 +283,18 @@ async fn tag_not_in_list_returns_500_and_no_token_header() {
     assert!(response.headers().get(TOKEN_NAME).is_none());
 }
 
-#[tokio::test]
-async fn save_and_get_token_from_repo() {
+#[test]
+fn save_and_get_token_from_repo() {
+    shared_runtime().block_on(save_and_get_token_from_repo_impl());
+}
+
+async fn save_and_get_token_from_repo_impl() {
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
     // Arrange: app with in-memory repo
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = init_in_memory_tag_repo();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -304,8 +412,12 @@ fn init_redis_container() -> Option<(DockerGuard, String)> {
     None
 }
 
-#[tokio::test]
-async fn apache_container_is_ok() {
+#[test]
+fn apache_container_is_ok() {
+    shared_runtime().block_on(apache_container_is_ok_impl());
+}
+
+async fn apache_container_is_ok_impl() {
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
@@ -326,15 +438,19 @@ async fn apache_container_is_ok() {
     }
 }
 
-#[tokio::test]
-async fn save_and_get_token_from_db() {
+#[test]
+fn save_and_get_token_from_db() {
+    shared_runtime().block_on(save_and_get_token_from_db_impl());
+}
+
+async fn save_and_get_token_from_db_impl() {
     let (_docker_guard, redis_url) = init_redis_container().unwrap();
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
     // Arrange: app with Redis-backed repo pointing to the container
     let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
-    let tag_repo = init_redis_tag_repo(&redis_url).expect("failed to init TagRepoDB");
+    let tag_repo = tag_repo().await;
     let ip_repo = IpRepoDB::new(&redis_url).expect("failed to create IpRepoDB");
     ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 0);
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -383,13 +499,17 @@ async fn save_and_get_token_from_db() {
     assert_eq!(0, *ip_repo_opt.unwrap().nb_bad_attempts());
 }
 
-#[tokio::test]
-async fn get_tag_should_return_500_when_ip_max_attempts_reached() {
+#[test]
+fn get_tag_should_return_500_when_ip_max_attempts_reached() {
+    shared_runtime().block_on(get_tag_should_return_500_when_ip_max_attempts_reached_impl());
+}
+
+async fn get_tag_should_return_500_when_ip_max_attempts_reached_impl() {
     let (_docker_guard, redis_url) = init_redis_container().unwrap();
 
     // Arrange: app with Redis-backed repo pointing to the container
     let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
-    let tag_repo = init_redis_tag_repo(&redis_url).expect("failed to init TagRepoDB");
+    let tag_repo = tag_repo().await;
     let ip_repo = IpRepoDB::new(&redis_url).expect("failed to create IpRepoDB");
     ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 10);
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -424,13 +544,17 @@ async fn get_tag_should_return_500_when_ip_max_attempts_reached() {
     assert!(headers.get(TOKEN_NAME).is_none());
 }
 
-#[tokio::test]
-async fn get_play_is_authorized_token() {
+#[test]
+fn get_play_is_authorized_token() {
+    shared_runtime().block_on(get_play_is_authorized_token_impl());
+}
+
+async fn get_play_is_authorized_token_impl() {
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let token_uuid_valid = Uuid::new_v4();
     let tag_ok = "tag1";
@@ -470,13 +594,17 @@ async fn get_play_is_authorized_token() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[tokio::test]
-async fn get_play_is_not_authorized_token() {
+#[test]
+fn get_play_is_not_authorized_token() {
+    shared_runtime().block_on(get_play_is_not_authorized_token_impl());
+}
+
+async fn get_play_is_not_authorized_token_impl() {
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -508,10 +636,14 @@ async fn get_play_is_not_authorized_token() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header() {
+#[test]
+fn get_play_is_not_authorized_token_when_random_path_and_no_token_header() {
+    shared_runtime().block_on(get_play_is_not_authorized_token_when_random_path_and_no_token_header_impl());
+}
+
+async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header_impl() {
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = init_in_memory_tag_repo();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -549,13 +681,17 @@ async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header()
     }
 }
 
-#[tokio::test]
-async fn get_play_is_authorized_token_and_ip_is_allowed() {
+#[test]
+fn get_play_is_authorized_token_and_ip_is_allowed() {
+    shared_runtime().block_on(get_play_is_authorized_token_and_ip_is_allowed_impl());
+}
+
+async fn get_play_is_authorized_token_and_ip_is_allowed_impl() {
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let ip_addr = [127,0,0,1];
     ip_repo.save_or_update(&IpAddr::from(ip_addr), 5);
@@ -597,10 +733,14 @@ async fn get_play_is_authorized_token_and_ip_is_allowed() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[tokio::test]
-async fn get_play_is_authorized_token_and_ip_is_not_allowed() {
+#[test]
+fn get_play_is_authorized_token_and_ip_is_not_allowed() {
+    shared_runtime().block_on(get_play_is_authorized_token_and_ip_is_not_allowed_impl());
+}
+
+async fn get_play_is_authorized_token_and_ip_is_not_allowed_impl() {
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let ip_addr = [127,0,0,1];
     ip_repo.save_or_update(&IpAddr::from(ip_addr), 10);
@@ -669,8 +809,12 @@ fn ip_repo_save_or_update_when_exists_and_nb_bad_attempts_is_more_than_zero() {
     assert_eq!(1, *ip_repo.get(&ip).unwrap().nb_bad_attempts());
 }
 
-#[tokio::test]
-async fn get_play_is_not_authorized_token_when_no_token() {
+#[test]
+fn get_play_is_not_authorized_token_when_no_token() {
+    shared_runtime().block_on(get_play_is_not_authorized_token_when_no_token_impl());
+}
+
+async fn get_play_is_not_authorized_token_when_no_token_impl() {
     let (_docker_guard, redis_url) = init_redis_container().unwrap();
     let (_docker_guard_apache_http2, apache_url) = init_apache_http2_container().unwrap();
 
@@ -684,7 +828,7 @@ async fn get_play_is_not_authorized_token_when_no_token() {
     );
     let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
     token_repo.save_token(&token);
-    let tag_repo = init_redis_tag_repo(&redis_url).expect("failed to init TagRepoDB");
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -714,11 +858,15 @@ async fn get_play_is_not_authorized_token_when_no_token() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn drop_import_ok() {
+#[test]
+fn drop_import_ok() {
+    shared_runtime().block_on(drop_import_ok_impl());
+}
+
+async fn drop_import_ok_impl() {
     // Arrange: use in-memory repo
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from("tests/resources/import_path"), None, None);
     let app_state = AppState {
@@ -747,11 +895,15 @@ async fn drop_import_ok() {
     assert_eq!(StatusCode::OK, response.status());
 }
 
-#[tokio::test]
-async fn tag_import_returns_not_found_when_called_with_ip_not_accepted() {
+#[test]
+fn tag_import_returns_not_found_when_called_with_ip_not_accepted() {
+    shared_runtime().block_on(tag_import_returns_not_found_when_called_with_ip_not_accepted_impl());
+}
+
+async fn tag_import_returns_not_found_when_called_with_ip_not_accepted_impl() {
     // Arrange: use in-memory repo
     let token_repo = InMemoryTokenRepo::default();
-    let tag_repo = InMemoryTagRepo::default();
+    let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
