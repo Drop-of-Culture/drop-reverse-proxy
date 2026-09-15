@@ -296,6 +296,12 @@ async fn save_and_get_token_from_repo_impl() {
     let token_repo = InMemoryTokenRepo::default();
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    create_tag(pg_pool, "jdznjevb", drop_id).await.expect("error when creating tag");
+
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -452,6 +458,13 @@ async fn save_and_get_token_from_db_impl() {
     let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
     let tag_repo = tag_repo().await;
     let ip_repo = IpRepoDB::new(&redis_url).expect("failed to create IpRepoDB");
+
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    create_tag(pg_pool, "jdznjevb", drop_id).await.expect("error when creating tag");
+
     ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 0);
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
