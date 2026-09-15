@@ -64,4 +64,17 @@ LIMIT 1
                 RepositoryError::EntityNotFound
             })
     }
+
+    pub async fn save_or_update(&self, token: &Token) -> Result<Uuid, RepositoryError> {
+        sqlx::query_scalar::<_, Uuid>("
+INSERT INTO \"token\" (id, tag_id)
+VALUES ($1, $2)
+RETURNING id
+    ")
+            .bind(token.id)
+            .bind(token.tag_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| RepositoryError::EntityNotSaved)
+    }
 }
