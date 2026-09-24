@@ -30,6 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tar::Archive;
 use toml::de::Error;
 use uuid::Uuid;
+use crate::repository::token::Token;
 
 pub const TOKEN_NAME: &str = "dop_token";
 pub const TAG_ARCHIVE_PREFIX: &str = "drop_";
@@ -82,7 +83,8 @@ enum AppError {
     Unauthorized,
     InternalError,
     ResourceNotFound,
-    PlaylistNotFound
+    PlaylistNotFound,
+    TokenSaveError,
 }
 
 impl IntoResponse for AppError {
@@ -94,34 +96,14 @@ impl IntoResponse for AppError {
             AppError::InternalError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             AppError::ResourceNotFound => StatusCode::NOT_FOUND.into_response(),
             AppError::PlaylistNotFound => StatusCode::NOT_FOUND.into_response(),
+            AppError::TokenSaveError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
-    }
-}
-
-#[derive(Debug, Clone, new)]
-pub struct Token {
-    id: Uuid,
-    create_date: NaiveDateTime,
-    tag: String
-}
-
-impl Serialize for Token {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // 3 is the number of fields in the struct.
-        let mut state = serializer.serialize_struct("Token", 3)?;
-        state.serialize_field("id", &self.id.to_string())?;
-        state.serialize_field("create_date", &self.create_date.to_string())?;
-        state.serialize_field("tag", &self.tag)?;
-        state.end()
     }
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    pub token_repo: Arc<dyn TokenRepo>,
+    pub token_repo: Arc<repository::token::TokenRepo>,
     pub tag_repo: Arc<repository::tag::TagRepo>,
     pub ip_repo: Arc<dyn IpRepo>,
     pub conf: Conf,
@@ -137,11 +119,9 @@ async fn tag(
     if let Some(tag_extracted) = extract_tag_from_path(tag.as_str()) {
         let uuid = Uuid::new_v4();
 
-        state.token_repo.save_token(&Token {
-            id: uuid,
-            create_date: NaiveDateTime::default(),
-            tag: tag_extracted.clone(),
-        });
+        let tag = state.tag_repo.get_by_name(&tag_extracted).await.map_err(|_| AppError::TagNotFound)?;
+        
+        state.token_repo.save_or_update(&Token::new(uuid, tag.id())).await.map_err(|_| AppError::TokenSaveError)?;
 
         let mut uri_new = state.conf.redirect_uri;
         uri_new.push_str("/tag/");
@@ -382,7 +362,7 @@ async fn token_guard(
     if let Some(header_token) = headers.get(TOKEN_NAME) {
         if let Ok(header_token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(header_token_str) {
-                if let Some(_token) = state.token_repo.get_token(token_uuid_requested) {
+                if let Ok(_token) = state.token_repo.get(token_uuid_requested).await {
                     return next.run(req).await;
                 }
             }
@@ -428,11 +408,12 @@ async fn play(
     if let Some(header_token) = headers.get(TOKEN_NAME) {
         if let Ok(token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                let token_opt = state.token_repo.get_token(token_uuid_requested);
-                if let Some(token) = token_opt {
+                let token_opt = state.token_repo.get(token_uuid_requested).await;
+                if let Ok(token) = token_opt 
+                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
-                    uri_new.push_str(&token.tag);
+                    uri_new.push_str(&tag.name());
                     uri_new.push_str("/playlist.m3u8");
                     println!("calling {uri_new}");
                     return match reqwest::get(uri_new).await {
@@ -461,11 +442,12 @@ async fn track(
     if let Some(header_token) = headers.get(TOKEN_NAME) {
         if let Ok(token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                let token_opt = state.token_repo.get_token(token_uuid_requested);
-                if let Some(token) = token_opt {
+                let token_opt = state.token_repo.get(token_uuid_requested).await;
+                if let Ok(token) = token_opt
+                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
-                    uri_new.push_str(&token.tag);
+                    uri_new.push_str(tag.name());
                     uri_new.push_str("/playlist_");
                     uri_new.push_str(&track_number.to_string());
                     uri_new.push_str(".m3u8");
@@ -505,11 +487,12 @@ async fn file(
     if let Some(header_token) = headers.get(TOKEN_NAME) {
         if let Ok(token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                let token_opt = state.token_repo.get_token(token_uuid_requested);
-                if let Some(token) = token_opt {
+                let token_opt = state.token_repo.get(token_uuid_requested).await;
+                if let Ok(token) = token_opt
+                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
-                    uri_new.push_str(&token.tag);
+                    uri_new.push_str(tag.name());
                     uri_new.push('/');
                     uri_new.push_str(path.as_str());
 
@@ -542,11 +525,12 @@ async fn playlist(
     if let Some(header_token) = headers.get(TOKEN_NAME)
         && let Ok(token_str) = header_token.to_str()
         && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
-        && let Some(token) = state.token_repo.get_token(token_uuid_requested) {
+        && let Ok(token) = state.token_repo.get(token_uuid_requested).await
+        && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
 
         let mut uri_new = String::from(&state.conf.redirect_uri);
         uri_new.push_str("/tag/");
-        uri_new.push_str(&token.tag);
+        uri_new.push_str(&tag.name());
         uri_new.push_str("/playlist.toml");
         println!("checking if there is playlist info at uri: {uri_new}");
         return if let Ok(resp) = reqwest::get(uri_new).await
@@ -562,82 +546,9 @@ async fn playlist(
     AppError::Unauthorized.into_response()
 }
 
-pub trait TokenRepo: Send + Sync {
-    fn get_token(&self, id: Uuid) -> Option<Token>;
-
-    fn save_token(&self, token: &Token);
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryTokenRepo {
     map: Arc<Mutex<HashMap<Uuid, Token>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TokenRepoDB {
-    client: redis::Client,
-}
-
-impl Default for TokenRepoDB {
-    fn default() -> Self {
-        let client = redis::Client::open("redis://127.0.0.1/")
-            .expect("failed to create a redis client");
-        Self { client }
-    }
-}
-
-impl TokenRepoDB {
-    pub fn new(redis_url: &str) -> redis::RedisResult<Self> {
-        Ok(Self { client: redis::Client::open(redis_url)? })
-    }
-}
-
-impl TokenRepo for InMemoryTokenRepo {
-    fn get_token(&self, id: Uuid) -> Option<Token> {
-        self.map.lock().unwrap().get(&id).cloned()
-    }
-
-    fn save_token(&self, token: &Token) {
-        self.map.lock().unwrap().insert(token.id, token.clone());
-    }
-}
-
-impl TokenRepo for TokenRepoDB {
-    fn get_token(&self, id: Uuid) -> Option<Token> {
-        let mut conn = match self.client.get_connection() {
-            Ok(c) => c,
-            Err(_) => return None,
-        };
-        let key = format!("token:{}", id);
-        let id_s: Option<String> = conn.hget(&key, "id").ok();
-        let tag: Option<String> = conn.hget(&key, "tag").ok();
-        let create_date_s: Option<String> = conn.hget(&key, "create_date").ok();
-
-        match (id_s, tag, create_date_s) {
-            (Some(id_str), Some(tag), Some(cd_str)) => {
-                if id_str != id.to_string() {
-                    return None;
-                }
-                let create_date = NaiveDateTime::parse_from_str(&cd_str, "%Y-%m-%d %H:%M:%S").ok()?;
-                Some(Token { id, create_date, tag })
-            }
-            _ => None,
-        }
-    }
-
-    fn save_token(&self, token: &Token) {
-        if let Ok(mut conn) = self.client.get_connection() {
-            let key = format!("token:{}", token.id);
-            let _: redis::RedisResult<()> = conn.hset_multiple(
-                &key,
-                &[
-                    ("id", token.id.to_string()),
-                    ("create_date", token.create_date.format("%Y-%m-%d %H:%M:%S").to_string()),
-                    ("tag", token.tag.clone()),
-                ],
-            );
-        }
-    }
 }
 
 pub trait TagRepo: Send + Sync {

@@ -4,11 +4,11 @@ use crate::mock::repository::drop::DropRepoMock;
 use crate::utils::{DockerGuard, create_default_db_config, init_apache_http2_container, start_postgres_container};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode};
-use chrono::NaiveDateTime;
 use drop_reverse_proxy::config::db::{create_pool, run_migrations};
 use drop_reverse_proxy::repository::tag::TagRepo;
+use drop_reverse_proxy::repository::token::{Token, TokenRepo};
 use drop_reverse_proxy::service::drop::DropService;
-use drop_reverse_proxy::{AppState, Conf, InMemoryIpRepo, InMemoryTokenRepo, IpRepo, IpRepoDB, ServiceConf, TOKEN_NAME, Token, TokenRepo, TokenRepoDB, app};
+use drop_reverse_proxy::{AppState, Conf, InMemoryIpRepo, IpRepo, IpRepoDB, ServiceConf, TOKEN_NAME, app};
 use http_body_util::Empty;
 use regex::Regex;
 use reqwest::header::SET_COOKIE;
@@ -20,7 +20,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, MutexGuard, OnceCell};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -68,6 +68,26 @@ async fn shared_pg_pool() -> PgPool {
         })
         .await
         .clone()
+}
+
+// All DB-touching tests share one Postgres pool/database, so they must not run
+// concurrently or they'd stomp on each other's rows. Every such test acquires
+// this lock (via `reset_db_for_test`) before touching the database and holds
+// it for the test's whole lifetime, which serializes those tests while leaving
+// non-DB tests free to run in parallel.
+static DB_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
+// Wipes every table so the caller starts from a clean database, then hands
+// back the lock guard that keeps this test exclusive until it's dropped
+// (i.e. when the calling test function returns).
+async fn reset_db_for_test() -> MutexGuard<'static, ()> {
+    let guard = DB_TEST_LOCK.lock().await;
+    let pool = shared_pg_pool().await;
+    sqlx::query("TRUNCATE TABLE \"token\", \"tag\", \"playlist\", \"drop\", \"artwork\", \"artist\" RESTART IDENTITY CASCADE")
+        .execute(&pool)
+        .await
+        .expect("failed to reset test database state");
+    guard
 }
 
 async fn create_tag(pool: &PgPool, tag_name: &str, drop_id: i32) -> Result<i32, Error> {
@@ -125,16 +145,25 @@ async fn tag_repo() -> TagRepo {
         .expect("failed to build TagRepo from shared pool")
 }
 
+// Returns a `TokenRepo` backed by the shared pool. Tests are responsible for
+// seeding any token rows they need.
+async fn token_repo() -> TokenRepo {
+    let pool = shared_pg_pool().await;
+    TokenRepo::from_pool(pool)
+        .expect("failed to build TokenRepo from shared pool")
+}
+
 #[test]
 fn get_tag() {
     shared_runtime().block_on(get_tag_impl());
 }
 
 async fn get_tag_impl() {
+    let _db_guard = reset_db_for_test().await;
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
 
@@ -211,7 +240,8 @@ fn get_tag_error() {
 }
 
 async fn get_tag_error_impl() {
-    let token_repo = InMemoryTokenRepo::default();
+    let _db_guard = reset_db_for_test().await;
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -249,8 +279,9 @@ fn tag_not_in_list_returns_500_and_no_token_header() {
 }
 
 async fn tag_not_in_list_returns_500_and_no_token_header_impl() {
+    let _db_guard = reset_db_for_test().await;
     // Arrange: use in-memory repo
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -289,18 +320,19 @@ fn save_and_get_token_from_repo() {
 }
 
 async fn save_and_get_token_from_repo_impl() {
+    let _db_guard = reset_db_for_test().await;
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
-    // Arrange: app with in-memory repo
-    let token_repo = InMemoryTokenRepo::default();
+    // Arrange: app with Postgres-backed repo
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let pg_pool = &shared_pg_pool().await;
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
     let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
     let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
-    create_tag(pg_pool, "jdznjevb", drop_id).await.expect("error when creating tag");
+    let tag_id = create_tag(pg_pool, "jdznjevb", drop_id).await.expect("error when creating tag");
 
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -333,12 +365,10 @@ async fn save_and_get_token_from_repo_impl() {
     let token_id = check_token_in_header_map_is_present_and_uuid(&response.headers());
 
     // Assert: repo contains the saved token and fields match
-    let token = app_state.token_repo.get_token(token_id).expect("token not found in repo");
+    let token = app_state.token_repo.get(token_id).await.expect("token not found in repo");
 
-    // Serialize to inspect private fields
-    let json = serde_json::to_value(&token).unwrap();
-    assert_eq!(json.get("id").and_then(|v| v.as_str()), Some(token_id.to_string().as_str()));
-    assert_eq!(json.get("tag").and_then(|v| v.as_str()), Some("jdznjevb"));
+    assert_eq!(token.id(), token_id);
+    assert_eq!(token.tag_id(), tag_id);
     let ip_repo_opt = ip_repo.get(&IpAddr::from([127,0,0,1]));
     assert!(ip_repo_opt.is_some());
     assert_eq!(0, *ip_repo_opt.unwrap().nb_bad_attempts());
@@ -450,12 +480,13 @@ fn save_and_get_token_from_db() {
 }
 
 async fn save_and_get_token_from_db_impl() {
+    let _db_guard = reset_db_for_test().await;
     let (_docker_guard, redis_url) = init_redis_container().unwrap();
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
-    // Arrange: app with Redis-backed repo pointing to the container
-    let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
+    // Arrange: app with Postgres-backed token repo and Redis-backed ip repo pointing to the container
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = IpRepoDB::new(&redis_url).expect("failed to create IpRepoDB");
 
@@ -463,7 +494,7 @@ async fn save_and_get_token_from_db_impl() {
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
     let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
     let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
-    create_tag(pg_pool, "jdznjevb", drop_id).await.expect("error when creating tag");
+    let tag_id = create_tag(pg_pool, "xurnxenyoawltkky", drop_id).await.expect("error when creating tag");
 
     ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 0);
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -483,9 +514,9 @@ async fn save_and_get_token_from_db_impl() {
     };
     let app = app(app_state.clone());
 
-    // Act: call the endpoint that saves a token with tag2
+    // Act: call the endpoint that saves a token with xurnxenyoawltkky
     let mut req = Request::builder()
-        .uri("/tag/jdznjevb")
+        .uri("/tag/xurnxenyoawltkky")
         .body(Empty::new())
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127,0,0,1], 12345))));
@@ -499,13 +530,12 @@ async fn save_and_get_token_from_db_impl() {
     // Assert: repo contains the saved token and fields match
     let token = app_state
         .token_repo
-        .get_token(token_id)
+        .get(token_id)
+        .await
         .expect("token not found in db repo");
 
-    // Serialize to inspect private fields
-    let json = serde_json::to_value(&token).unwrap();
-    assert_eq!(json.get("id").and_then(|v| v.as_str()), Some(token_id.to_string().as_str()));
-    assert_eq!(json.get("tag").and_then(|v| v.as_str()), Some("jdznjevb"));
+    assert_eq!(token.id(), token_id);
+    assert_eq!(token.tag_id(), tag_id);
 
     let ip_repo_opt = ip_repo.get(&IpAddr::from([127,0,0,1]));
     assert!(ip_repo_opt.is_some());
@@ -518,10 +548,11 @@ fn get_tag_should_return_500_when_ip_max_attempts_reached() {
 }
 
 async fn get_tag_should_return_500_when_ip_max_attempts_reached_impl() {
+    let _db_guard = reset_db_for_test().await;
     let (_docker_guard, redis_url) = init_redis_container().unwrap();
 
-    // Arrange: app with Redis-backed repo pointing to the container
-    let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
+    // Arrange: app with Postgres-backed token repo and Redis-backed ip repo pointing to the container
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = IpRepoDB::new(&redis_url).expect("failed to create IpRepoDB");
     ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 10);
@@ -563,20 +594,23 @@ fn get_play_is_authorized_token() {
 }
 
 async fn get_play_is_authorized_token_impl() {
+    let _db_guard = reset_db_for_test().await;
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
+
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    let tag_id = create_tag(pg_pool, "tag1", drop_id).await.expect("error when creating tag");
+
     let token_uuid_valid = Uuid::new_v4();
-    let tag_ok = "tag1";
-    let token = Token::new(
-        token_uuid_valid,
-        NaiveDateTime::default(),
-        tag_ok.to_string()
-    );
-    token_repo.save_token(&token);
+    let token = Token::new(token_uuid_valid, tag_id);
+    token_repo.save_or_update(&token).await.expect("failed to save token");
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -613,10 +647,11 @@ fn get_play_is_not_authorized_token() {
 }
 
 async fn get_play_is_not_authorized_token_impl() {
+    let _db_guard = reset_db_for_test().await;
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -655,7 +690,8 @@ fn get_play_is_not_authorized_token_when_random_path_and_no_token_header() {
 }
 
 async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header_impl() {
-    let token_repo = InMemoryTokenRepo::default();
+    let _db_guard = reset_db_for_test().await;
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
@@ -700,22 +736,25 @@ fn get_play_is_authorized_token_and_ip_is_allowed() {
 }
 
 async fn get_play_is_authorized_token_and_ip_is_allowed_impl() {
+    let _db_guard = reset_db_for_test().await;
     let ( _guard, base_url) = init_apache_http2_container()
         .expect("no apache http container launched");
 
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let ip_addr = [127,0,0,1];
     ip_repo.save_or_update(&IpAddr::from(ip_addr), 5);
+
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    let tag_id = create_tag(pg_pool, "tag1", drop_id).await.expect("error when creating tag");
+
     let token_uuid_valid = Uuid::new_v4();
-    let tag_ok = "tag1";
-    let token = Token::new(
-        token_uuid_valid,
-        NaiveDateTime::default(),
-        tag_ok.to_string()
-    );
-    token_repo.save_token(&token);
+    let token = Token::new(token_uuid_valid, tag_id);
+    token_repo.save_or_update(&token).await.expect("failed to save token");
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -752,19 +791,22 @@ fn get_play_is_authorized_token_and_ip_is_not_allowed() {
 }
 
 async fn get_play_is_authorized_token_and_ip_is_not_allowed_impl() {
-    let token_repo = InMemoryTokenRepo::default();
+    let _db_guard = reset_db_for_test().await;
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let ip_addr = [127,0,0,1];
     ip_repo.save_or_update(&IpAddr::from(ip_addr), 10);
+
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    let tag_id = create_tag(pg_pool, "tag1", drop_id).await.expect("error when creating tag");
+
     let token_uuid_valid = Uuid::new_v4();
-    let tag_ok = "tag1";
-    let token = Token::new(
-        token_uuid_valid,
-        NaiveDateTime::default(),
-        tag_ok.to_string()
-    );
-    token_repo.save_token(&token);
+    let token = Token::new(token_uuid_valid, tag_id);
+    token_repo.save_or_update(&token).await.expect("failed to save token");
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -828,21 +870,23 @@ fn get_play_is_not_authorized_token_when_no_token() {
 }
 
 async fn get_play_is_not_authorized_token_when_no_token_impl() {
-    let (_docker_guard, redis_url) = init_redis_container().unwrap();
-    let (_docker_guard_apache_http2, apache_url) = init_apache_http2_container().unwrap();
+    let _db_guard = reset_db_for_test().await;
+    let (_docker_guard_apache_http2, _apache_url) = init_apache_http2_container().unwrap();
 
-    // Arrange: app with Redis-backed repo pointing to the container
-    let tag_ok = "tag1";
-    let token_uuid_valid = Uuid::new_v4();
-    let token = Token::new(
-        token_uuid_valid,
-        NaiveDateTime::default(),
-        tag_ok.to_string()
-    );
-    let token_repo = TokenRepoDB::new(&redis_url).expect("failed to create TokenRepoDB");
-    token_repo.save_token(&token);
+    // Arrange: app with Postgres-backed token repo
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
+
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop(pg_pool, "the test drop", artwork_id).await.expect("error when creating drop");
+    let tag_id = create_tag(pg_pool, "tag1", drop_id).await.expect("error when creating tag");
+
+    let token_uuid_valid = Uuid::new_v4();
+    let token = Token::new(token_uuid_valid, tag_id);
+    let token_repo = token_repo().await;
+    token_repo.save_or_update(&token).await.expect("failed to save token");
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -877,8 +921,9 @@ fn drop_import_ok() {
 }
 
 async fn drop_import_ok_impl() {
+    let _db_guard = reset_db_for_test().await;
     // Arrange: use in-memory repo
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from("tests/resources/import_path"), None, None);
@@ -914,8 +959,9 @@ fn tag_import_returns_not_found_when_called_with_ip_not_accepted() {
 }
 
 async fn tag_import_returns_not_found_when_called_with_ip_not_accepted_impl() {
+    let _db_guard = reset_db_for_test().await;
     // Arrange: use in-memory repo
-    let token_repo = InMemoryTokenRepo::default();
+    let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let ip_repo = InMemoryIpRepo::default();
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);

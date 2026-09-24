@@ -1,11 +1,10 @@
 use crate::config::db::{DatabaseConfig, create_pool};
 use crate::repository::{Entity, RepositoryError};
 use chrono::NaiveDateTime;
-use derive_new::new;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
 
-#[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq)]
 pub struct Token {
     id: Uuid,
     create_date: NaiveDateTime,
@@ -23,6 +22,14 @@ impl Token {
 
     pub fn tag_id(&self) -> i32 {
         self.tag_id
+    }
+
+    pub fn new(id: Uuid, tag_id: i32) -> Self {
+        Self {
+            id,
+            create_date: NaiveDateTime::default(),
+            tag_id
+        }
     }
 }
 
