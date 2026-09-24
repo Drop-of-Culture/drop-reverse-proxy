@@ -105,7 +105,7 @@ impl IntoResponse for AppError {
 pub struct AppState {
     pub token_repo: Arc<repository::token::TokenRepo>,
     pub tag_repo: Arc<repository::tag::TagRepo>,
-    pub ip_repo: Arc<dyn IpRepo>,
+    pub ip_repo: Arc<repository::ip::IpRepo>,
     pub conf: Conf,
     pub entity_repositories: Vec<RepoType>,
     pub service_conf: ServiceConf
@@ -146,7 +146,7 @@ async fn tag(
                 }
             },
             Err(_) => {
-                increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+                increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
                 Err(AppError::TagNotFound)
             },
         }
@@ -310,18 +310,18 @@ async fn tag_guard(
 ) -> Response {
     println!("connect info ip {:#?}", connect_info.ip());
     // check if IP is banned
-    if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts) {
-        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+    if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts).await {
+        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
         return AppError::Unauthorized.into_response();
     }
     // check if tag exists
     let path = req.uri().path();
     if let Some(tag) = extract_tag_from_path(path) {
         if check_tag(tag.as_str(), state.tag_repo).await.is_ok() {
-                state.ip_repo.save_or_update(&connect_info.ip(), 0);
+                let _ = state.ip_repo.save_or_update(&connect_info.ip(), 0).await;
                 return next.run(req).await.into_response();
         } else {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo)
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await
         }
     }
     AppError::TagNotFound.into_response()
@@ -338,12 +338,9 @@ async fn drop_import_guard(
     next.run(req).await
 }
 
-fn increment_ip_nb_bad_attempts(ip_addr: &IpAddr, ip_repo: &Arc<dyn IpRepo>) {
-    match ip_repo.get(&ip_addr) {
-        None => {}
-        Some(ip) => {
-            ip_repo.save_or_update(ip_addr, ip.nb_bad_attempts + 1);
-        }
+async fn increment_ip_nb_bad_attempts(ip_addr: &IpAddr, ip_repo: &Arc<repository::ip::IpRepo>) {
+    if let Ok(ip) = ip_repo.get(ip_addr).await {
+        let _ = ip_repo.save_or_update(ip_addr, *ip.nb_bad_attempts() + 1).await;
     }
 }
 
@@ -354,8 +351,8 @@ async fn token_guard(
     req: Request,
     next: Next
 ) -> Response {
-    if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts) {
-        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+    if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts).await {
+        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
         return AppError::Unauthorized.into_response();
     }
     let headers = req.headers().clone();
@@ -368,7 +365,7 @@ async fn token_guard(
             }
         }
     }
-    increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+    increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
     AppError::Unauthorized.into_response()
 }
 
@@ -376,13 +373,13 @@ async fn check_tag(tag: &str, tag_repo: Arc<repository::tag::TagRepo>) -> Result
     tag_repo.get_by_name(tag).await
 }
 
-fn check_ip(ip_addr: IpAddr, ip_repo: &Arc<dyn IpRepo>, max_bad_attempts: u8) -> bool {
-    match ip_repo.get(&ip_addr) {
-        Some(ip) => {
+async fn check_ip(ip_addr: IpAddr, ip_repo: &Arc<repository::ip::IpRepo>, max_bad_attempts: u8) -> bool {
+    match ip_repo.get(&ip_addr).await {
+        Ok(ip) => {
             println!("{:#?}", ip);
-            ip.nb_bad_attempts < max_bad_attempts as u32
+            *ip.nb_bad_attempts() < max_bad_attempts as u32
         },
-        None => true,
+        Err(_) => true,
     }
 }
 
@@ -421,7 +418,7 @@ async fn play(
                             Ok(resp.bytes().await.unwrap().into_response())
                         },
                         Err(_) => {
-                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
                             Err(AppError::TagNotFound)
                         },
                     }
@@ -457,7 +454,7 @@ async fn track(
                             Ok(resp.bytes().await.unwrap().into_response())
                         },
                         Err(_) => {
-                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
                             Err(AppError::TagNotFound)
                         },
                     }
@@ -505,7 +502,7 @@ async fn file(
                             Ok(resp.bytes().await.unwrap().into_response().into_body().into_response())
                         },
                         Err(_) => {
-                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
                             Err(AppError::TagNotFound)
                         },
                     }
@@ -539,7 +536,7 @@ async fn playlist(
             && let Ok(playlist_data) = PlaylistData::create_from_toml_text(text.as_str()) {
             Json(playlist_data).into_response()
         } else {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo);
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
             AppError::PlaylistNotFound.into_response()
         }
     }

@@ -3,10 +3,11 @@ use drop_reverse_proxy::repository::artist::ArtistRepo;
 use drop_reverse_proxy::repository::artwork::ArtworkRepo;
 use drop_reverse_proxy::repository::drop::DropRepo;
 use drop_reverse_proxy::repository::tag::TagRepo;
+use drop_reverse_proxy::repository::ip::IpRepo;
 use drop_reverse_proxy::repository::token::TokenRepo;
 use drop_reverse_proxy::repository::{Repo, RepoByName};
 use drop_reverse_proxy::service::drop::DropService;
-use drop_reverse_proxy::{AppState, InMemoryIpRepo, ServiceConf, app, create_conf_from_toml_file};
+use drop_reverse_proxy::{AppState, ServiceConf, app, create_conf_from_toml_file};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,16 +44,16 @@ async fn main() {
     
     /*["jdznjevb", "xurnxenyoawltkky", "tag3", "playlist", "simpleredirect"].iter()
         .for_each(|t| tag_repo.save(&Tag::new(t.to_string(), NaiveDateTime::default())));*/
-    let ip_repo = InMemoryIpRepo::default();
     //tag_repo.save(&drop_reverse_proxy::Tag::new("tag1".to_string(), chrono::NaiveDateTime::default()));
 
     let listener = tokio::net::TcpListener::bind(conf.bind_addr()).await.unwrap();
-    
+
     if let Ok(drop_repository) = DropRepo::new(&db_config).await
         && let Ok(artwork_repository) = ArtworkRepo::new(&db_config).await
         && let Ok(artist_repository) = ArtistRepo::new(&db_config).await
         && let Ok(tag_repo) = TagRepo::new(&db_config).await
-        && let Ok(token_repo) = TokenRepo::from_pool(db_pool.clone()) {
+        && let Ok(token_repo) = TokenRepo::from_pool(db_pool.clone())
+        && let Ok(ip_repo) = IpRepo::from_pool(db_pool.clone()) {
         println!("Database connection successful");
 
         let drop_service = DropService::new(
@@ -63,7 +64,7 @@ async fn main() {
         let app_state = AppState {
             token_repo: Arc::new(token_repo.clone()),
             tag_repo: Arc::new(tag_repo.clone()),
-            ip_repo: Arc::new(ip_repo),
+            ip_repo: Arc::new(ip_repo.clone()),
             conf,
             entity_repositories: Vec::new(),
             service_conf: ServiceConf::new(drop_service),

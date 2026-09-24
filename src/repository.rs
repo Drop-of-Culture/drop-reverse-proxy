@@ -7,6 +7,7 @@ pub mod playlist;
 pub mod artwork;
 pub mod tag;
 pub mod token;
+pub mod ip;
 
 pub trait Entity {
     fn id(&self) -> String;
