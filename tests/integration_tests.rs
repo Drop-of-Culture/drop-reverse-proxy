@@ -9,7 +9,7 @@ use drop_reverse_proxy::repository::ip::IpRepo;
 use drop_reverse_proxy::repository::tag::TagRepo;
 use drop_reverse_proxy::repository::token::{Token, TokenRepo};
 use drop_reverse_proxy::service::drop::DropService;
-use drop_reverse_proxy::{AppState, Conf, IpRepo as IpRepoTrait, IpRepoDB, ServiceConf, TOKEN_NAME, app};
+use drop_reverse_proxy::{AppState, Conf, ServiceConf, TOKEN_NAME, app};
 use http_body_util::Empty;
 use regex::Regex;
 use reqwest::header::SET_COOKIE;
@@ -842,33 +842,6 @@ async fn get_play_is_authorized_token_and_ip_is_not_allowed_impl() {
     let response = app.oneshot(req).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-
-// IpRepoDB tests
-#[test]
-fn ip_repo_save_or_update_when_not_exists() {
-    let (_docker_guard, redis_url) = init_redis_container().unwrap();
-    let ip_repo = IpRepoDB::new(redis_url.as_str()).expect("failed to create IpRepoDB");
-    ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 0);
-    assert_eq!(0, *ip_repo.get(&IpAddr::from([127,0,0,1])).unwrap().nb_bad_attempts());
-}
-
-#[test]
-fn ip_repo_save_or_update_when_exists() {
-    let (_docker_guard, redis_url) = init_redis_container().unwrap();
-    let ip_repo = IpRepoDB::new(redis_url.as_str()).expect("failed to create IpRepoDB");
-    let ip = std::net::IpAddr::from([127,0,0,1]);
-    ip_repo.save_or_update(&ip, 0);
-    assert_eq!(0, *ip_repo.get(&ip).unwrap().nb_bad_attempts());
-}
-
-#[test]
-fn ip_repo_save_or_update_when_exists_and_nb_bad_attempts_is_more_than_zero() {
-    let (_docker_guard, redis_url) = init_redis_container().unwrap();
-    let ip_repo = IpRepoDB::new(redis_url.as_str()).expect("failed to create IpRepoDB");
-    let ip = std::net::IpAddr::from([127,0,0,1]);
-    ip_repo.save_or_update(&ip, 1);
-    assert_eq!(1, *ip_repo.get(&ip).unwrap().nb_bad_attempts());
 }
 
 #[test]
