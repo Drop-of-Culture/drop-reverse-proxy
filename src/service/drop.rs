@@ -181,17 +181,18 @@ where
             .await
             .or(Err(ImportError::CantCreateArtworkFromArtworkName))?;
 
-        // create drop
-        let _drop_id = self.drop_repository
-            .save_or_update(&Drop::new(0, artwork_id, artist.name().to_string()))
-            .await
-            .or(Err(ImportError::CantCreateDropFromDropRequest))?;
-
-        // create artwork directory in web server
+        // artwork directory in web server
         let mut artwork_dir_path = web_server_path.clone();
         artwork_dir_path.push_str("/");
         artwork_dir_path.push_str(ARTWORK_DIR_PREFIX);
         artwork_dir_path.push_str(&artwork_id.to_string());
+
+        // create drop
+        let _drop_id = self.drop_repository
+            .save_or_update(&Drop::new(0, artwork_id, artist.name().to_string(), artwork_dir_path.clone()))
+            .await
+            .or(Err(ImportError::CantCreateDropFromDropRequest))?;
+
         fs::create_dir(&artwork_dir_path).or(Err(ImportError::CantCreateArtworkDirectoryInWebServer))?;
         // move the files
         let mut i = 1;

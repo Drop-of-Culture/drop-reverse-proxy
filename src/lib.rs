@@ -445,6 +445,7 @@ async fn track(
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
                     uri_new.push_str(tag.name());
+                    // TODO instead of this put tag.drop_id() or drop_repo.get(tag.drop_id()).await.drop_dir
                     uri_new.push_str("/playlist_");
                     uri_new.push_str(&track_number.to_string());
                     uri_new.push_str(".m3u8");
@@ -527,6 +528,7 @@ async fn playlist(
 
         let mut uri_new = String::from(&state.conf.redirect_uri);
         uri_new.push_str("/tag/");
+        // TODO instead of this put tag.drop_id() or drop_repo.get(tag.drop_id()).await.drop_dir
         uri_new.push_str(&tag.name());
         uri_new.push_str("/playlist.toml");
         println!("checking if there is playlist info at uri: {uri_new}");

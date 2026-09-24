@@ -60,7 +60,8 @@ async fn setup_db() -> (drop_reverse_proxy::config::db::DatabaseConfig, Containe
         CREATE TABLE "drop" (
             id SERIAL PRIMARY KEY,
             artwork_id INTEGER NOT NULL,
-            name VARCHAR(255) NOT NULL
+            name VARCHAR(255) NOT NULL,
+            dir VARCHAR(128) NOT NULL DEFAULT ''
         )
         "#
     )

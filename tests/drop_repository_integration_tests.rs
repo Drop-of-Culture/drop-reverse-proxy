@@ -29,7 +29,8 @@ async fn should_insert_data() {
         CREATE TABLE "drop" (
             id SERIAL PRIMARY KEY,
             artwork_id INTEGER NOT NULL,
-            name VARCHAR(255) NOT NULL
+            name VARCHAR(255) NOT NULL,
+            dir VARCHAR(128) NOT NULL DEFAULT ''
         )
         "#
     )
@@ -40,7 +41,7 @@ async fn should_insert_data() {
     let repo = DropRepo::new(&db_config).await.expect("Failed to create drop repository");
 
     // 4. Test save_or_update
-    let new_drop = Drop::new(0, 1, "Artwork 01".to_string());
+    let new_drop = Drop::new(0, 1, "Drop 01".to_string(), "drop_01_dir".to_string());
 
     let drop_id = <DropRepo as Repo<Drop>>::save_or_update(&repo, &new_drop).await.expect("Failed to save drop");
 
@@ -50,5 +51,6 @@ async fn should_insert_data() {
     
     assert_eq!(saved_drop.artwork_id(), 1);
     assert_eq!(saved_drop.id(), drop_id);
-    assert_eq!(saved_drop.name(), "Artwork 01");
+    assert_eq!(saved_drop.name(), "Drop 01");
+    assert_eq!(saved_drop.dir(), "drop_01_dir");
 }
