@@ -1,8 +1,9 @@
 use crate::repository::artist::Artist;
 use crate::repository::artwork::Artwork;
-use crate::repository::{Repo, RepoByName, RepoByUuid, RepositoryError};
-use crate::service::drop::DropService;
+use crate::repository::token::Token;
+use crate::repository::{Repo, RepoByName, RepositoryError};
 use crate::service::DropServiceT;
+use crate::service::drop::DropService;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderValue, StatusCode};
@@ -10,27 +11,22 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use chrono::NaiveDateTime;
 use derive_new::new;
-use figment::providers::{Format, Toml};
 use figment::Figment;
+use figment::providers::{Format, Toml};
 use flate2::read::GzDecoder;
-use redis::Commands;
 use regex::Regex;
 use repository::RepoType;
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use service::drop::{DropRequest, ImportError};
-use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tar::Archive;
 use toml::de::Error;
 use uuid::Uuid;
-use crate::repository::token::Token;
 
 pub const TOKEN_NAME: &str = "dop_token";
 pub const TAG_ARCHIVE_PREFIX: &str = "drop_";
@@ -119,12 +115,15 @@ async fn tag(
     Path(tag): Path<String>,
 ) -> Result<Response, AppError> {
     if let Some(tag_extracted) = extract_tag_from_path(tag.as_str()) {
+        println!("tag(): tag extracted");
         let uuid = Uuid::new_v4();
 
         let tag = state.tag_repo.get_by_name(&tag_extracted).await.map_err(|_| AppError::TagNotFound)?;
+        println!("tag(): tag found in repo");
         let drop = state.service_conf.drop_service.find_drop(tag.drop_id()).await.ok_or(AppError::DropNotFound)?;
-
+        println!("tag(): drop found in repo");
         state.token_repo.save_or_update(&Token::new(uuid, tag.id())).await.map_err(|_| AppError::TokenSaveError)?;
+        println!("token saved");
 
         let mut uri_new = state.conf.redirect_uri;
         uri_new.push_str("/tag/");
@@ -322,11 +321,14 @@ async fn tag_guard(
     if let Some(tag) = extract_tag_from_path(path) {
         if check_tag(tag.as_str(), state.tag_repo).await.is_ok() {
                 let _ = state.ip_repo.save_or_update(&connect_info.ip(), 0).await;
+                println!("tag_guard(): tag found in repo");
                 return next.run(req).await.into_response();
         } else {
+            println!("tag_guard(): tag not found in repo");
             increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await
         }
     }
+    println!("tag_guard(): tag not found in path");
     AppError::TagNotFound.into_response()
 }
 
@@ -409,11 +411,12 @@ async fn play(
         if let Ok(token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
                 let token_opt = state.token_repo.get(token_uuid_requested).await;
-                if let Ok(token) = token_opt 
-                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
+                if let Ok(token) = token_opt
+                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
+                    && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
-                    uri_new.push_str(&tag.name());
+                    uri_new.push_str(drop.dir());
                     uri_new.push_str("/playlist.m3u8");
                     println!("calling {uri_new}");
                     return match reqwest::get(uri_new).await {
@@ -438,32 +441,25 @@ async fn track(
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Result<Response, AppError> {
+    println!("called : {}", req.uri().path());
     let headers = req.headers().clone();
-    if let Some(header_token) = headers.get(TOKEN_NAME) {
-        if let Ok(token_str) = header_token.to_str() {
-            if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                let token_opt = state.token_repo.get(token_uuid_requested).await;
-                if let Ok(token) = token_opt
-                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
-                    && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
-                    let mut uri_new = String::from(state.conf.redirect_uri);
-                    uri_new.push_str("/tag/");
-                    uri_new.push_str(tag.name());
-                    uri_new.push_str(drop.dir());
-                    uri_new.push_str(&track_number.to_string());
-                    uri_new.push_str(".m3u8");
-                    println!("calling {uri_new}");
-                    return match reqwest::get(uri_new).await {
-                        Ok(resp) => {
-                            Ok(resp.bytes().await.unwrap().into_response())
-                        },
-                        Err(_) => {
-                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
-                            Err(AppError::TagNotFound)
-                        },
-                    }
-                }
-            }
+    if let Some(header_token) = headers.get(TOKEN_NAME)
+        && let Ok(token_str) = header_token.to_str()
+        && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
+        && let Ok(token) = state.token_repo.get(token_uuid_requested).await
+        && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
+        && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
+
+        let uri_new = format!("{}/tag/{}/{}_{}.m3u8", &state.conf.redirect_uri, drop.dir(), tag.name(), track_number);
+        println!("calling {uri_new}");
+        return match reqwest::get(uri_new).await {
+            Ok(resp) => {
+                Ok(resp.bytes().await.unwrap().into_response())
+            },
+            Err(_) => {
+                increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+                Err(AppError::TagNotFound)
+            },
         }
     }
     Ok(StatusCode::UNAUTHORIZED.into_response())
@@ -490,10 +486,11 @@ async fn file(
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
                 let token_opt = state.token_repo.get(token_uuid_requested).await;
                 if let Ok(token) = token_opt
-                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
+                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
+                    && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
-                    uri_new.push_str(tag.name());
+                    uri_new.push_str(drop.dir());
                     uri_new.push('/');
                     uri_new.push_str(path.as_str());
 

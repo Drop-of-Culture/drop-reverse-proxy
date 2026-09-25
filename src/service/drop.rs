@@ -1,13 +1,12 @@
 use crate::repository::artist::Artist;
 pub(crate) use crate::repository::drop::Drop;
-use crate::repository::{Repo, RepoByName, RepoByUuid};
+use crate::repository::{Repo, RepoByName};
 pub use crate::service::DropServiceT;
+use crate::repository::artwork::Artwork;
 use async_trait::async_trait;
 use derive_new::new;
 use serde::Deserialize;
 use std::fs;
-use uuid::Uuid;
-use crate::repository::artwork::Artwork;
 
 pub const ARTWORK_DIR_PREFIX: &str = "artwork_";
 pub const TRACK_FILE_PREFIX: &str = "track_";
@@ -213,9 +212,15 @@ where
     }
     
     async fn find_drop(&self, id: i32) -> Option<Drop> {
-        if let Ok(drop) = self.drop_repository.get(id).await {
-            return Some(drop);
+        match self.drop_repository.get(id).await {
+            Ok(drop) => {
+                println!("drop found in repo");
+                Some(drop)
+            },
+            Err(error) => {
+                println!("{:?}", error);
+                None
+            }
         }
-        None
     }
 }

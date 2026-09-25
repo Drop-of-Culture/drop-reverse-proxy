@@ -10,7 +10,7 @@ use drop_reverse_proxy::repository::tag::TagRepo;
 use drop_reverse_proxy::repository::token::{Token, TokenRepo};
 use drop_reverse_proxy::service::drop::DropService;
 use drop_reverse_proxy::{AppState, Conf, ServiceConf, TOKEN_NAME, app};
-use http_body_util::Empty;
+use http_body_util::{BodyExt, Empty};
 use regex::Regex;
 use reqwest::header::SET_COOKIE;
 use sqlx::{Error, PgPool};
@@ -111,6 +111,19 @@ RETURNING id
 ")
         .bind(drop_name)
         .bind(artwork_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn create_drop_with_dir(pool: &PgPool, drop_name: &str, artwork_id: i32, dir: &str) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"drop\" (name, artwork_id, dir)
+VALUES ($1, $2, $3)
+RETURNING id
+")
+        .bind(drop_name)
+        .bind(artwork_id)
+        .bind(dir)
         .fetch_one(pool)
         .await
 }
@@ -991,4 +1004,125 @@ async fn tag_import_returns_not_found_when_called_with_ip_not_accepted_impl() {
     let response = app.oneshot(req).await.unwrap();
 
     assert_eq!(StatusCode::NOT_FOUND, response.status());
+}
+
+
+#[test]
+fn get_tag_full_flow() {
+    shared_runtime().block_on(get_tag_full_flow_impl());
+}
+
+// End-to-end check of /tag/{tag}: the tag is resolved to its drop, the drop's
+// `dir` index.html is proxied from Apache, a token is persisted and handed back
+// as a cookie, and the caller's IP bad-attempt counter is managed by the guard.
+async fn get_tag_full_flow_impl() {
+    let _db_guard = reset_db_for_test().await;
+    let (_guard, base_url) = init_apache_http2_container()
+        .expect("no apache http container launched");
+
+    let token_repo = token_repo().await;
+    let tag_repo = tag_repo().await;
+    let drop_repo = drop_repo().await;
+    let ip_repo = ip_repo().await;
+
+    // Arrange: the tag name differs from the drop dir so we know the handler
+    // proxies drop.dir() and not the tag name.
+    let pg_pool = &shared_pg_pool().await;
+    let artist_id = create_artist(pg_pool, "full_flow_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "full flow artwork", artist_id).await.expect("error when creating artwork");
+    let drop_dir = "jdznjevb";
+    let drop_id = create_drop_with_dir(pg_pool, "full flow drop", artwork_id, drop_dir).await.expect("error when creating drop");
+    let tag_name = "full_flow_tag";
+    let tag_id = create_tag(pg_pool, tag_name, drop_id).await.expect("error when creating tag");
+
+    // The IP already has some bad attempts: a successful tag lookup must reset them.
+    let client_ip = IpAddr::from([127, 0, 0, 1]);
+    ip_repo.save_or_update(&client_ip, 3).await.expect("failed to save ip");
+
+    let redirect_uri = base_url.trim_end_matches('/').to_string();
+    let conf = Conf::new(redirect_uri, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
+    let app_state = AppState {
+        token_repo: Arc::new(token_repo.clone()),
+        tag_repo: Arc::new(tag_repo.clone()),
+        ip_repo: Arc::new(ip_repo.clone()),
+        conf,
+        entity_repositories: Vec::new(),
+        service_conf: ServiceConf::new(
+            DropService::new(
+                Arc::new(drop_repo.clone()),
+                Arc::new(ArtistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
+            )
+        ),
+    };
+
+    let tag_request = |uri: &str| {
+        let mut req = Request::builder()
+            .uri(uri)
+            .body(Empty::new())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::from((client_ip, 12345))));
+        req
+    };
+
+    // Act: first call
+    let response = app(app_state.clone()).oneshot(tag_request(&format!("/tag/{tag_name}"))).await.unwrap();
+
+    // Assert: status and proxied body
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_token_id = check_token_in_header_map_is_present_and_uuid(response.headers());
+    let body = response.into_body().collect().await.expect("failed to read body").to_bytes();
+    let expected_body = std::fs::read(format!("tests/resources/apache/tag/{drop_dir}/index.html"))
+        .expect("failed to read expected index.html");
+    assert_eq!(body.as_ref(), expected_body.as_slice());
+
+    // Assert: token persisted and linked to the tag
+    let token = app_state.token_repo.get(first_token_id).await.expect("token not found in db");
+    assert_eq!(token.id(), first_token_id);
+    assert_eq!(token.tag_id(), tag_id);
+
+    // Assert: IP bad attempts reset by the guard
+    let ip = ip_repo.get(&client_ip).await.expect("ip not found in db");
+    assert_eq!(0, *ip.nb_bad_attempts());
+
+    // Act: second call on the same tag issues a new token
+    let response = app(app_state.clone()).oneshot(tag_request(&format!("/tag/{tag_name}"))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second_token_id = check_token_in_header_map_is_present_and_uuid(response.headers());
+    assert_ne!(first_token_id, second_token_id);
+    let token = app_state.token_repo.get(second_token_id).await.expect("second token not found in db");
+    assert_eq!(token.tag_id(), tag_id);
+
+    let tokens_for_tag: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM \"token\" WHERE tag_id = $1")
+        .bind(tag_id)
+        .fetch_one(pg_pool)
+        .await
+        .expect("failed to count tokens");
+    assert_eq!(2, tokens_for_tag);
+
+    // Act: use the token issued by /tag to call /play
+    let mut play_req = tag_request("/play");
+    play_req.headers_mut().insert(TOKEN_NAME, first_token_id.to_string().parse().unwrap());
+    let response = app(app_state.clone()).oneshot(play_req).await.unwrap();
+
+    // Assert: the drop dir's playlist is proxied (not the tag name's)
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.expect("failed to read body").to_bytes();
+    let expected_body = std::fs::read(format!("tests/resources/apache/tag/{drop_dir}/playlist.m3u8"))
+        .expect("failed to read expected playlist.m3u8");
+    assert_eq!(body.as_ref(), expected_body.as_slice());
+
+    // Act: unknown tag
+    let response = app(app_state.clone()).oneshot(tag_request("/tag/unknown_tag")).await.unwrap();
+
+    // Assert: rejected, no cookie, no new token, bad attempt recorded
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get(SET_COOKIE).is_none());
+    let total_tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM \"token\"")
+        .fetch_one(pg_pool)
+        .await
+        .expect("failed to count tokens");
+    assert_eq!(2, total_tokens);
+    let ip = ip_repo.get(&client_ip).await.expect("ip not found in db");
+    assert_eq!(1, *ip.nb_bad_attempts());
 }
