@@ -11,6 +11,7 @@ pub struct Drop {
     artwork_id: i32,
     name: String,
     dir: String,
+    type_id: i32,
 }
 
 impl Drop {
@@ -28,6 +29,10 @@ impl Drop {
 
     pub fn dir(&self) -> &str {
         &self.dir
+    }
+    
+    pub fn type_id(&self) -> i32 {
+        self.type_id
     }
 }
 
@@ -68,7 +73,7 @@ impl DropRepo {
 impl Repo<Drop> for DropRepo {
     async fn get(&self, id: i32) -> Result<Drop, RepositoryError> {
         sqlx::query_as::<_, Drop>("
-SELECT id, artwork_id, name, dir
+SELECT id, artwork_id, name, dir, type_id
 FROM \"drop\"
 WHERE id = $1
 LIMIT 1
@@ -86,13 +91,14 @@ LIMIT 1
 
     async fn save_or_update(&self, drop: &Drop) -> Result<i32, RepositoryError> {
         sqlx::query_scalar::<_, i32>("
-INSERT INTO \"drop\" (artwork_id, name, dir)
-VALUES ($1, $2, $3)
+INSERT INTO \"drop\" (artwork_id, name, dir, type_id)
+VALUES ($1, $2, $3, $4)
 RETURNING id
     ")
             .bind(drop.artwork_id)
             .bind(drop.name.clone())
             .bind(drop.dir.clone())
+            .bind(drop.type_id)
             .fetch_one(&self.pool)
             .await
             .map_err(|_| RepositoryError::EntityNotSaved)

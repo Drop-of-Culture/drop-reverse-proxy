@@ -52,6 +52,7 @@ mod tests {
             10,
             String::from("drop1"),
             String::from("drop1_dir"),
+            0
         );
         let save_result = drop_repo.save_or_update(&drop).await;
         assert!(save_result.is_ok());

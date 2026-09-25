@@ -11,6 +11,7 @@ use drop_reverse_proxy::{AppState, ServiceConf, app, create_conf_from_toml_file}
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use drop_reverse_proxy::repository::redirect::RedirectRepo;
 
 #[tokio::main]
 async fn main() {
@@ -53,13 +54,15 @@ async fn main() {
         && let Ok(artist_repository) = ArtistRepo::new(&db_config).await
         && let Ok(tag_repo) = TagRepo::new(&db_config).await
         && let Ok(token_repo) = TokenRepo::from_pool(db_pool.clone())
-        && let Ok(ip_repo) = IpRepo::from_pool(db_pool.clone()) {
+        && let Ok(ip_repo) = IpRepo::from_pool(db_pool.clone())
+        && let Ok(redirect_repo) = RedirectRepo::new(&db_config).await {
         println!("Database connection successful");
 
         let drop_service = DropService::new(
             Arc::new(drop_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::drop::Drop>>,
             Arc::new(artist_repository) as Arc<dyn RepoByName<drop_reverse_proxy::repository::artist::Artist>>,
             Arc::new(artwork_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::artwork::Artwork>>,
+            Arc::new(redirect_repo) as Arc<dyn Repo<drop_reverse_proxy::repository::redirect::Redirect>>,
         );
         let app_state = AppState {
             token_repo: Arc::new(token_repo.clone()),

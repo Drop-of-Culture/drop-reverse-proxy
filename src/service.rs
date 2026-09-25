@@ -1,5 +1,5 @@
 use crate::repository::artist::Artist;
-use crate::repository::{Repo, RepoByName};
+use crate::repository::{redirect, Repo, RepoByName};
 use crate::service::drop::{DropRequest, ImportError};
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -19,4 +19,5 @@ pub trait DropServiceT {
     ) -> Result<(), ImportError>;
 
     async fn find_drop(&self, id: i32) -> Option<drop::Drop>;
+    async fn find_redirect_from_drop_id(&self, drop_id: i32) -> Option<redirect::Redirect>;
 }

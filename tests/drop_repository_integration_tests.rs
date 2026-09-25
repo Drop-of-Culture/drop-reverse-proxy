@@ -41,7 +41,7 @@ async fn should_insert_data() {
     let repo = DropRepo::new(&db_config).await.expect("Failed to create drop repository");
 
     // 4. Test save_or_update
-    let new_drop = Drop::new(0, 1, "Drop 01".to_string(), "drop_01_dir".to_string());
+    let new_drop = Drop::new(0, 1, "Drop 01".to_string(), "drop_01_dir".to_string(), 0);
 
     let drop_id = <DropRepo as Repo<Drop>>::save_or_update(&repo, &new_drop).await.expect("Failed to save drop");
 

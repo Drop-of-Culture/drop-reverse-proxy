@@ -6,3 +6,5 @@ pub mod playlist;
 pub mod artist;
 #[path = "repository/artwork.rs"]
 pub mod artwork;
+#[path = "repository/redirect.rs"]
+pub mod redirect;

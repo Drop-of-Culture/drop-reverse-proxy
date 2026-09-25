@@ -1,13 +1,11 @@
-use mock::repository::artist::ArtistRepoMock;
-use mock::repository::drop::DropRepoMock;
-use mock::repository::artwork::ArtworkRepoMock;
-use mock::repository::playlist::PlaylistRepoMock;
 use drop_reverse_proxy::repository::artist::Artist;
-use drop_reverse_proxy::service::drop::{DropRequest, DropService, DropServiceT, ImportError, ARTWORK_DIR_PREFIX, TRACK_FILE_PREFIX};
+use drop_reverse_proxy::service::drop::{ARTWORK_DIR_PREFIX, DropRequest, DropService, DropServiceT, ImportError, TRACK_FILE_PREFIX};
+use mock::repository::artist::ArtistRepoMock;
+use mock::repository::artwork::ArtworkRepoMock;
+use mock::repository::drop::DropRepoMock;
+use mock::repository::redirect::RedirectRepoMock;
 use std::fs;
-use sqlx::testing::TestTermination;
 use tempfile::TempDir;
-use drop_reverse_proxy::repository::Repo;
 
 #[path = "../mock.rs"]
 mod mock;
@@ -17,11 +15,12 @@ async fn test_create_drop_success_with_artist_id() {
     let artist_repo = ArtistRepoMock::new();
     let drop_repo = DropRepoMock::new();
     let artwork_repo = ArtworkRepoMock::new();
+    let redirect_repo = RedirectRepoMock::new();
 
     let artist_id = 10;
     artist_repo.map_by_id().write().unwrap().insert(artist_id, Artist::new(artist_id, "Artist Name".to_string()));
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let temp_import_dir = TempDir::new().unwrap();
     let import_path = temp_import_dir.path().to_str().unwrap().to_string();
@@ -56,12 +55,13 @@ async fn test_create_drop_success_with_artist_name() {
     let artist_repo = ArtistRepoMock::new();
     let drop_repo = DropRepoMock::new();
     let artwork_repo = ArtworkRepoMock::new();
+    let redirect_repo = RedirectRepoMock::new();
 
     let artist_id = 10;
     let artist_name = "Artist Name";
     artist_repo.map_by_name().write().unwrap().insert(artist_name.to_string(), Artist::new(artist_id, artist_name.to_string()));
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let temp_import_dir = TempDir::new().unwrap();
     let import_path = temp_import_dir.path().to_str().unwrap().to_string();
@@ -89,8 +89,9 @@ async fn test_create_drop_error_both_artist_id_and_name() {
     let artist_repo = ArtistRepoMock::new();
     let drop_repo = DropRepoMock::new();
     let artwork_repo = ArtworkRepoMock::new();
+    let redirect_repo = RedirectRepoMock::new();
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let drop_request = DropRequest::new(
         Some(1),
@@ -108,8 +109,9 @@ async fn test_create_drop_error_artist_id_not_found() {
     let artist_repo = ArtistRepoMock::new();
     let drop_repo = DropRepoMock::new();
     let artwork_repo = ArtworkRepoMock::new();
+    let redirect_repo = RedirectRepoMock::new();
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let drop_request = DropRequest::new(
         Some(999),
@@ -127,8 +129,9 @@ async fn test_create_drop_error_artist_name_not_found() {
     let artist_repo = ArtistRepoMock::new();
     let drop_repo = DropRepoMock::new();
     let artwork_repo = ArtworkRepoMock::new();
+    let redirect_repo = RedirectRepoMock::new();
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let drop_request = DropRequest::new(
         None,
@@ -146,11 +149,12 @@ async fn test_create_drop_error_missing_track_file() {
     let artist_repo = ArtistRepoMock::new();
     let drop_repo = DropRepoMock::new();
     let artwork_repo = ArtworkRepoMock::new();
+    let redirect_repo = RedirectRepoMock::new();
 
     let artist_id = 1;
     artist_repo.map_by_id().write().unwrap().insert(artist_id, Artist::new(artist_id, "Artist".to_string()));
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let temp_import_dir = TempDir::new().unwrap();
     let import_path = temp_import_dir.path().to_str().unwrap().to_string();

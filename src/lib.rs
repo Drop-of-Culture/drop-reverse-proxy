@@ -8,7 +8,7 @@ use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use derive_new::new;
@@ -82,6 +82,7 @@ enum AppError {
     PlaylistNotFound,
     TokenSaveError,
     DropNotFound,
+    RedirectNotFound,
 }
 
 impl IntoResponse for AppError {
@@ -95,6 +96,7 @@ impl IntoResponse for AppError {
             AppError::PlaylistNotFound => StatusCode::NOT_FOUND.into_response(),
             AppError::TokenSaveError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             AppError::DropNotFound => StatusCode::NOT_FOUND.into_response(),
+            AppError::RedirectNotFound => StatusCode::NOT_FOUND.into_response(),
         }
     }
 }
@@ -122,6 +124,12 @@ async fn tag(
         println!("tag(): tag found in repo");
         let drop = state.service_conf.drop_service.find_drop(tag.drop_id()).await.ok_or(AppError::DropNotFound)?;
         println!("tag(): drop found in repo");
+        
+        if drop.type_id() == 2 {
+            let redirect = state.service_conf.drop_service.find_redirect_from_drop_id(drop.id()).await.ok_or(AppError::RedirectNotFound)?;
+            return Ok(Redirect::temporary(redirect.link()).into_response());
+        }
+        
         state.token_repo.save_or_update(&Token::new(uuid, tag.id())).await.map_err(|_| AppError::TokenSaveError)?;
         println!("token saved");
 
@@ -599,7 +607,8 @@ pub struct ServiceConf {
         Arc<dyn Repo<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
         Arc<dyn Repo<Artwork>>,
-    >,
+        Arc<dyn Repo<repository::redirect::Redirect>>,
+    >
 }
 
 impl Clone for ServiceConf {
@@ -617,7 +626,7 @@ impl ServiceConf {
         Arc<dyn Repo<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
         Arc<dyn Repo<Artwork>>,
-    > {
+        Arc<dyn Repo<repository::redirect::Redirect>>> {
         &self.drop_service
     }
 }

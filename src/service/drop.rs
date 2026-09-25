@@ -1,5 +1,6 @@
 use crate::repository::artist::Artist;
 pub(crate) use crate::repository::drop::Drop;
+use crate::repository::redirect::Redirect;
 use crate::repository::{Repo, RepoByName};
 pub use crate::service::DropServiceT;
 use crate::repository::artwork::Artwork;
@@ -65,46 +66,53 @@ impl DropRequest {
 }
 
 #[derive(Debug, Deserialize,)]
-pub struct DropService<T, U, V>
+pub struct DropService<T, U, V, W>
 where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
-{
+    W: Repo<Redirect> + Send + Sync {
     drop_repository: T,
     artist_repository: U,
     artwork_repository: V,
+    redirect_repository: W,
 }
 
-impl<T, U, V> Clone for DropService<T, U, V>
+impl<T, U, V, W> Clone for DropService<T, U, V, W>
 where
     T: Repo<Drop> + Send + Sync + Clone,
     U: RepoByName<Artist> + Send + Sync + Clone,
-    V: Repo<Artwork> + Send + Sync + Clone, {
+    V: Repo<Artwork> + Send + Sync + Clone,
+    W: Repo<Redirect> + Send + Sync + Clone,
+{
     fn clone(&self) -> Self {
         DropService::new(
             self.drop_repository.clone(),
             self.artist_repository.clone(),
-            self.artwork_repository.clone()
+            self.artwork_repository.clone(),
+            self.redirect_repository.clone(),
         )
     }
 }
 
-impl<T, U, V> DropService<T, U, V>
+impl<T, U, V, W> DropService<T, U, V, W>
 where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
+    W: Repo<Redirect> + Send + Sync,
 {
     pub fn new(
         drop_repository: T,
         artist_repository: U,
         artwork_repository: V,
-    ) -> DropService<T, U, V>
+        redirect_repository: W,
+    ) -> DropService<T, U, V, W>
     where
         T: Sized,
         U: Sized,
         V: Sized,
+        W: Sized,
     {
         /*if drop_repository.drop() {
             println!("drop repository not set, can't create drop");
@@ -123,6 +131,7 @@ where
             drop_repository,
             artist_repository,
             artwork_repository,
+            redirect_repository,
         }
     }
 
@@ -137,14 +146,19 @@ where
     fn artwork_repository(&self) -> &V {
         &self.artwork_repository
     }
+
+    fn redirect_repository(&self) -> &W {
+        &self.redirect_repository
+    }
 }
 
 #[async_trait]
-impl<T, U, V> DropServiceT for DropService<T, U, V>
+impl<T, U, V, W> DropServiceT for DropService<T, U, V, W>
 where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
+    W: Repo<Redirect> + Send + Sync,
 {
     async fn create_drop(
         &self,
@@ -189,7 +203,8 @@ where
 
         // create drop
         let _drop_id = self.drop_repository
-            .save_or_update(&Drop::new(0, artwork_id, artist.name().to_string(), artwork_dir_path.clone()))
+            // type_id hard coded to 0 for playlist
+            .save_or_update(&Drop::new(0, artwork_id, artist.name().to_string(), artwork_dir_path.clone(), 0))
             .await
             .or(Err(ImportError::CantCreateDropFromDropRequest))?;
 
@@ -216,6 +231,19 @@ where
             Ok(drop) => {
                 println!("drop found in repo");
                 Some(drop)
+            },
+            Err(error) => {
+                println!("{:?}", error);
+                None
+            }
+        }
+    }
+
+    async fn find_redirect_from_drop_id(&self, drop_id: i32) -> Option<Redirect> {
+        match self.redirect_repository.get(drop_id).await {
+            Ok(redirect) => {
+                println!("drop found in repo");
+                Some(redirect)
             },
             Err(error) => {
                 println!("{:?}", error);

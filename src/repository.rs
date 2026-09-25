@@ -9,6 +9,7 @@ pub mod artwork;
 pub mod tag;
 pub mod token;
 pub mod ip;
+pub mod redirect;
 
 pub trait Entity {
     fn id(&self) -> String;
@@ -82,5 +83,4 @@ pub enum RepoType {
     Playlist(std::sync::Arc<crate::repository::playlist::PlaylistRepo>),
     Tag(std::sync::Arc<crate::repository::tag::TagRepo>),
 }
-
 

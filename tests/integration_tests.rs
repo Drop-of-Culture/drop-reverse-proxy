@@ -24,6 +24,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::{Mutex, MutexGuard, OnceCell};
 use tower::ServiceExt;
 use uuid::Uuid;
+use drop_reverse_proxy::repository::redirect::RedirectRepo;
 
 mod mock;
 pub mod service;
@@ -84,7 +85,7 @@ static DB_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 async fn reset_db_for_test() -> MutexGuard<'static, ()> {
     let guard = DB_TEST_LOCK.lock().await;
     let pool = shared_pg_pool().await;
-    sqlx::query("TRUNCATE TABLE \"token\", \"tag\", \"playlist\", \"drop\", \"artwork\", \"artist\", \"ip\" RESTART IDENTITY CASCADE")
+    sqlx::query("TRUNCATE TABLE \"token\", \"tag\", \"playlist\", \"redirect\", \"drop\", \"artwork\", \"artist\", \"ip\" RESTART IDENTITY CASCADE")
         .execute(&pool)
         .await
         .expect("failed to reset test database state");
@@ -183,6 +184,12 @@ async fn ip_repo() -> IpRepo {
         .expect("failed to build IpRepo from shared pool")
 }
 
+async fn redirect_repo() -> RedirectRepo {
+    let pool = shared_pg_pool().await;
+    RedirectRepo::from_pool(pool)
+        .expect("failed to build RedirectRepo from shared pool")
+}
+
 #[test]
 fn get_tag() {
     shared_runtime().block_on(get_tag_impl());
@@ -197,6 +204,7 @@ async fn get_tag_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
 
     let pg_pool = &shared_pg_pool().await;
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
@@ -224,7 +232,8 @@ async fn get_tag_impl() {
             DropService::new(
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
-                Arc::new(ArtworkRepoMock::new())
+                Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone())
             )
         ),
     };
@@ -276,6 +285,7 @@ async fn get_tag_error_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -288,6 +298,7 @@ async fn get_tag_error_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone())
             )
         ),
     };
@@ -317,6 +328,7 @@ async fn tag_not_in_list_returns_500_and_no_token_header_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -329,6 +341,7 @@ async fn tag_not_in_list_returns_500_and_no_token_header_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -362,6 +375,7 @@ async fn save_and_get_token_from_repo_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let pg_pool = &shared_pg_pool().await;
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
     let artwork_id = create_artwork(pg_pool, "artwork test", artist_id).await.expect("error when creating artwork");
@@ -380,6 +394,7 @@ async fn save_and_get_token_from_repo_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -523,6 +538,7 @@ async fn save_and_get_token_from_db_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
 
     let pg_pool = &shared_pg_pool().await;
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
@@ -543,6 +559,7 @@ async fn save_and_get_token_from_db_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -589,6 +606,7 @@ async fn get_tag_should_return_500_when_ip_max_attempts_reached_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     ip_repo.save_or_update(&IpAddr::from([127,0,0,1]), 10).await.expect("failed to save ip");
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -602,6 +620,7 @@ async fn get_tag_should_return_500_when_ip_max_attempts_reached_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -636,6 +655,7 @@ async fn get_play_is_authorized_token_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
 
     let pg_pool = &shared_pg_pool().await;
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
@@ -658,6 +678,7 @@ async fn get_play_is_authorized_token_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -690,6 +711,7 @@ async fn get_play_is_not_authorized_token_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let conf = Conf::new(base_url, String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -702,6 +724,7 @@ async fn get_play_is_not_authorized_token_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),   
     };
@@ -730,6 +753,7 @@ async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header_i
     let token_repo = token_repo().await;
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
+    let redirect_repo = redirect_repo().await;
     let ip_repo = ip_repo().await;
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
@@ -743,6 +767,7 @@ async fn get_play_is_not_authorized_token_when_random_path_and_no_token_header_i
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -781,6 +806,7 @@ async fn get_play_is_authorized_token_and_ip_is_allowed_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let ip_addr = [127,0,0,1];
     ip_repo.save_or_update(&IpAddr::from(ip_addr), 5).await.expect("failed to save ip");
 
@@ -805,6 +831,7 @@ async fn get_play_is_authorized_token_and_ip_is_allowed_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -834,6 +861,7 @@ async fn get_play_is_authorized_token_and_ip_is_not_allowed_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let ip_addr = [127,0,0,1];
     ip_repo.save_or_update(&IpAddr::from(ip_addr), 10).await.expect("failed to save ip");
 
@@ -858,6 +886,7 @@ async fn get_play_is_authorized_token_and_ip_is_not_allowed_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -889,6 +918,7 @@ async fn get_play_is_not_authorized_token_when_no_token_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
 
     let pg_pool = &shared_pg_pool().await;
     let artist_id = create_artist(pg_pool, "test_artist").await.expect("error when creating artist");
@@ -912,6 +942,7 @@ async fn get_play_is_not_authorized_token_when_no_token_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -940,6 +971,7 @@ async fn drop_import_ok_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from("tests/resources/import_path"), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -952,6 +984,7 @@ async fn drop_import_ok_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -979,6 +1012,7 @@ async fn tag_import_returns_not_found_when_called_with_ip_not_accepted_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
     let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
     let app_state = AppState {
         token_repo: Arc::new(token_repo.clone()),
@@ -991,6 +1025,7 @@ async fn tag_import_returns_not_found_when_called_with_ip_not_accepted_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };
@@ -1024,6 +1059,7 @@ async fn get_tag_full_flow_impl() {
     let tag_repo = tag_repo().await;
     let drop_repo = drop_repo().await;
     let ip_repo = ip_repo().await;
+    let redirect_repo = redirect_repo().await;
 
     // Arrange: the tag name differs from the drop dir so we know the handler
     // proxies drop.dir() and not the tag name.
@@ -1052,6 +1088,7 @@ async fn get_tag_full_flow_impl() {
                 Arc::new(drop_repo.clone()),
                 Arc::new(ArtistRepoMock::new()),
                 Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo.clone()),
             )
         ),
     };

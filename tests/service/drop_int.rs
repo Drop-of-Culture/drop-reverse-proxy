@@ -1,7 +1,8 @@
-use drop_reverse_proxy::repository::{Repo, RepoByName};
 use drop_reverse_proxy::repository::artist::{Artist, ArtistRepo};
 use drop_reverse_proxy::repository::artwork::ArtworkRepo;
 use drop_reverse_proxy::repository::drop::{Drop, DropRepo};
+use drop_reverse_proxy::repository::redirect::RedirectRepo;
+use drop_reverse_proxy::repository::{Repo, RepoByName};
 use drop_reverse_proxy::service::drop::{ARTWORK_DIR_PREFIX, DropRequest, DropService, DropServiceT, TRACK_FILE_PREFIX};
 use std::fs;
 use std::sync::Arc;
@@ -61,7 +62,8 @@ async fn setup_db() -> (drop_reverse_proxy::config::db::DatabaseConfig, Containe
             id SERIAL PRIMARY KEY,
             artwork_id INTEGER NOT NULL,
             name VARCHAR(255) NOT NULL,
-            dir VARCHAR(128) NOT NULL DEFAULT ''
+            dir VARCHAR(128) NOT NULL DEFAULT '',
+            type_id INTEGER NOT NULL DEFAULT 0
         )
         "#
     )
@@ -82,8 +84,9 @@ async fn test_create_drop_with_new_artist_name() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo, redirect_repo);
 
     let temp_import_dir = TempDir::new().unwrap();
     let import_path = temp_import_dir.path().to_str().unwrap().to_string();
@@ -127,8 +130,9 @@ async fn test_create_drop_with_existing_artist_id() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo, redirect_repo);
 
     let artist_id = artist_repo.save_or_update(&Artist::new(0, "Existing Artist".to_string())).await.unwrap();
 
@@ -159,8 +163,9 @@ async fn test_create_drop_error_both_id_and_name() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let drop_request = DropRequest::new(
         Some(1),
@@ -183,13 +188,14 @@ async fn test_find_drop_returns_existing_drop() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
     let drop_id = drop_repo
-        .save_or_update(&Drop::new(0, 42, "My Drop".to_string(), "artwork_42".to_string()))
+        .save_or_update(&Drop::new(0, 42, "My Drop".to_string(), "artwork_42".to_string(), 0))
         .await
         .expect("Failed to save drop");
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let found = service.find_drop(drop_id).await.expect("Drop should be found");
     assert_eq!(found.id(), drop_id);
@@ -205,24 +211,25 @@ async fn test_find_drop_returns_the_requested_drop_among_several() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
     let first_id = drop_repo
-        .save_or_update(&Drop::new(0, 1, "First".to_string(), "dir_1".to_string()))
+        .save_or_update(&Drop::new(0, 1, "First".to_string(), "dir_1".to_string(), 0))
         .await
         .unwrap();
     let second_id = drop_repo
-        .save_or_update(&Drop::new(0, 2, "Second".to_string(), "dir_2".to_string()))
+        .save_or_update(&Drop::new(0, 2, "Second".to_string(), "dir_2".to_string(), 0))
         .await
         .unwrap();
     assert_ne!(first_id, second_id);
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     let first = service.find_drop(first_id).await.expect("First drop should be found");
-    assert_eq!(first, Drop::new(first_id, 1, "First".to_string(), "dir_1".to_string()));
+    assert_eq!(first, Drop::new(first_id, 1, "First".to_string(), "dir_1".to_string(), 0));
 
     let second = service.find_drop(second_id).await.expect("Second drop should be found");
-    assert_eq!(second, Drop::new(second_id, 2, "Second".to_string(), "dir_2".to_string()));
+    assert_eq!(second, Drop::new(second_id, 2, "Second".to_string(), "dir_2".to_string(), 0));
 }
 
 #[tokio::test]
@@ -232,8 +239,9 @@ async fn test_find_drop_returns_none_when_drop_does_not_exist() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     assert!(service.find_drop(1).await.is_none());
     assert!(service.find_drop(0).await.is_none());
@@ -247,9 +255,10 @@ async fn test_find_drop_returns_none_on_database_error() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
     let drop_id = drop_repo
-        .save_or_update(&Drop::new(0, 1, "Doomed".to_string(), "dir".to_string()))
+        .save_or_update(&Drop::new(0, 1, "Doomed".to_string(), "dir".to_string(), 0))
         .await
         .unwrap();
 
@@ -258,7 +267,7 @@ async fn test_find_drop_returns_none_on_database_error() {
         .await
         .expect("Failed to drop table");
 
-    let service = DropService::new(drop_repo, artist_repo, artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo, artwork_repo, redirect_repo);
 
     assert!(service.find_drop(drop_id).await.is_none());
 }
@@ -270,8 +279,9 @@ async fn test_find_drop_after_create_drop() {
     let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
     let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
     let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
 
-    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo);
+    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo, redirect_repo);
 
     let artist_id = artist_repo.save_or_update(&Artist::new(0, "Some Artist".to_string())).await.unwrap();
 
