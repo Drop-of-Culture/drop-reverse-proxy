@@ -46,8 +46,8 @@ async fn test_create_drop_success_with_artist_id() {
     assert!(artwork_dir.exists());
     assert!(artwork_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 1)).exists());
 
-    let drop_result = service.drop_repository().get(0).await;
-    assert!(drop_result.is_ok());
+    let drop_result = service.find_drop(0).await;
+    assert!(drop_result.is_some());
     assert!(drop_result.unwrap().name().len() > 0);
 }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 use crate::config::db::{create_pool, DatabaseConfig};
-use crate::repository::{Entity, Repo, RepositoryError};
+use crate::repository::{Entity, Repo, RepoByUuid, RepositoryError};
 use derive_new::new;
 use sqlx::{Pool, Postgres};
 
@@ -57,6 +57,10 @@ impl DropRepo {
     }
     pub fn pool(&self) -> &Pool<Postgres> {
         &self.pool
+    }
+
+    pub fn from_pool(pool: Pool<Postgres>) -> Result<DropRepo, RepositoryError> {
+        Ok(Self { pool })
     }
 }
 

@@ -26,6 +26,10 @@ impl Tag {
     pub fn create_date(&self) -> &NaiveDateTime {
         &self.create_date
     }
+
+    pub fn drop_id(&self) -> i32 {
+        self.drop_id
+    }
 }
 
 impl Entity for Tag {

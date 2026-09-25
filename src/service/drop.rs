@@ -1,11 +1,12 @@
 use crate::repository::artist::Artist;
-use crate::repository::drop::Drop;
-use crate::repository::{Repo, RepoByName};
+pub(crate) use crate::repository::drop::Drop;
+use crate::repository::{Repo, RepoByName, RepoByUuid};
 pub use crate::service::DropServiceT;
 use async_trait::async_trait;
 use derive_new::new;
 use serde::Deserialize;
 use std::fs;
+use uuid::Uuid;
 use crate::repository::artwork::Artwork;
 
 pub const ARTWORK_DIR_PREFIX: &str = "artwork_";
@@ -126,15 +127,15 @@ where
         }
     }
 
-    pub fn drop_repository(&self) -> &T {
+    fn drop_repository(&self) -> &T {
         &self.drop_repository
     }
 
-    pub fn artist_repository(&self) -> &U {
+    fn artist_repository(&self) -> &U {
         &self.artist_repository
     }
 
-    pub fn artwork_repository(&self) -> &V {
+    fn artwork_repository(&self) -> &V {
         &self.artwork_repository
     }
 }
@@ -209,5 +210,12 @@ where
             i += 1;
         }
         Ok(())
+    }
+    
+    async fn find_drop(&self, id: i32) -> Option<Drop> {
+        if let Ok(drop) = self.drop_repository.get(id).await {
+            return Some(drop);
+        }
+        None
     }
 }

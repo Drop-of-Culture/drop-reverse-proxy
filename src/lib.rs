@@ -1,6 +1,6 @@
 use crate::repository::artist::Artist;
 use crate::repository::artwork::Artwork;
-use crate::repository::{Repo, RepoByName, RepositoryError};
+use crate::repository::{Repo, RepoByName, RepoByUuid, RepositoryError};
 use crate::service::drop::DropService;
 use crate::service::DropServiceT;
 use axum::extract::{ConnectInfo, Path, Request, State};
@@ -85,6 +85,7 @@ enum AppError {
     ResourceNotFound,
     PlaylistNotFound,
     TokenSaveError,
+    DropNotFound,
 }
 
 impl IntoResponse for AppError {
@@ -97,6 +98,7 @@ impl IntoResponse for AppError {
             AppError::ResourceNotFound => StatusCode::NOT_FOUND.into_response(),
             AppError::PlaylistNotFound => StatusCode::NOT_FOUND.into_response(),
             AppError::TokenSaveError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            AppError::DropNotFound => StatusCode::NOT_FOUND.into_response(),
         }
     }
 }
@@ -120,12 +122,13 @@ async fn tag(
         let uuid = Uuid::new_v4();
 
         let tag = state.tag_repo.get_by_name(&tag_extracted).await.map_err(|_| AppError::TagNotFound)?;
-        
+        let drop = state.service_conf.drop_service.find_drop(tag.drop_id()).await.ok_or(AppError::DropNotFound)?;
+
         state.token_repo.save_or_update(&Token::new(uuid, tag.id())).await.map_err(|_| AppError::TokenSaveError)?;
 
         let mut uri_new = state.conf.redirect_uri;
         uri_new.push_str("/tag/");
-        uri_new.push_str(&tag_extracted);
+        uri_new.push_str(drop.dir());
         uri_new.push_str("/index.html");
         println!("calling url {uri_new}");
         return match reqwest::get(uri_new).await {
@@ -441,12 +444,12 @@ async fn track(
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
                 let token_opt = state.token_repo.get(token_uuid_requested).await;
                 if let Ok(token) = token_opt
-                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
+                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
+                    && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
                     uri_new.push_str(tag.name());
-                    // TODO instead of this put tag.drop_id() or drop_repo.get(tag.drop_id()).await.drop_dir
-                    uri_new.push_str("/playlist_");
+                    uri_new.push_str(drop.dir());
                     uri_new.push_str(&track_number.to_string());
                     uri_new.push_str(".m3u8");
                     println!("calling {uri_new}");
@@ -524,17 +527,17 @@ async fn playlist(
         && let Ok(token_str) = header_token.to_str()
         && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
         && let Ok(token) = state.token_repo.get(token_uuid_requested).await
-        && let Ok(tag) = state.tag_repo.get(token.tag_id()).await {
+        && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
+        && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
 
         let mut uri_new = String::from(&state.conf.redirect_uri);
         uri_new.push_str("/tag/");
-        // TODO instead of this put tag.drop_id() or drop_repo.get(tag.drop_id()).await.drop_dir
-        uri_new.push_str(&tag.name());
+        uri_new.push_str(drop.dir());
         uri_new.push_str("/playlist.toml");
         println!("checking if there is playlist info at uri: {uri_new}");
         return if let Ok(resp) = reqwest::get(uri_new).await
             && let Ok(text) = resp.text().await
-            && text.len() > 0
+            && !text.is_empty()
             && let Ok(playlist_data) = PlaylistData::create_from_toml_text(text.as_str()) {
             Json(playlist_data).into_response()
         } else {

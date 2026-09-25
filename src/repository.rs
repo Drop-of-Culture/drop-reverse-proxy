@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub mod drop;
 pub mod artist;
@@ -22,6 +23,13 @@ pub enum RepositoryError {
 pub trait Repo<E: Entity>: Send + Sync {
     async fn get(&self, id: i32) -> Result<E, RepositoryError>;
     async fn save_or_update(&self, entity: &E) -> Result<i32, RepositoryError>;
+}
+
+#[async_trait]
+pub trait RepoByUuid<E: Entity>: Send + Sync {
+    async fn get(&self, id: i32) -> Result<E, RepositoryError>;
+    async fn save_or_update(&self, entity: &E) -> Result<i32, RepositoryError>;
+    async fn get_by_uuid(&self, name: &Uuid) -> Result<E, RepositoryError>;
 }
 
 #[async_trait]
