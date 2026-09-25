@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::config::db::{create_pool, DatabaseConfig};
 use crate::repository::{Entity, Repo, RepoByUuid, RepositoryError};
 use derive_new::new;
-use sqlx::{Pool, Postgres};
+use sqlx::{Execute, Pool, Postgres};
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Drop {
@@ -72,14 +72,15 @@ impl DropRepo {
 #[async_trait]
 impl Repo<Drop> for DropRepo {
     async fn get(&self, id: i32) -> Result<Drop, RepositoryError> {
-        sqlx::query_as::<_, Drop>("
+        let req = sqlx::query_as::<_, Drop>("
 SELECT id, artwork_id, name, dir, type_id
 FROM \"drop\"
 WHERE id = $1
 LIMIT 1
 ")
-            .bind(id)
-            .fetch_one(&self.pool)
+            .bind(id);
+            println!("get(): {} - {}", req.sql(), id);
+            req.fetch_one(&self.pool)
             .await
             .map_err(|e| {
                 match e {

@@ -1,7 +1,7 @@
 use crate::repository::artist::Artist;
 pub(crate) use crate::repository::drop::Drop;
 use crate::repository::redirect::Redirect;
-use crate::repository::{Repo, RepoByName};
+use crate::repository::{Repo, RepoByDropId, RepoByName};
 pub use crate::service::DropServiceT;
 use crate::repository::artwork::Artwork;
 use async_trait::async_trait;
@@ -71,7 +71,7 @@ where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
-    W: Repo<Redirect> + Send + Sync {
+    W: RepoByDropId<Redirect> + Send + Sync {
     drop_repository: T,
     artist_repository: U,
     artwork_repository: V,
@@ -83,7 +83,7 @@ where
     T: Repo<Drop> + Send + Sync + Clone,
     U: RepoByName<Artist> + Send + Sync + Clone,
     V: Repo<Artwork> + Send + Sync + Clone,
-    W: Repo<Redirect> + Send + Sync + Clone,
+    W: RepoByDropId<Redirect> + Send + Sync + Clone,
 {
     fn clone(&self) -> Self {
         DropService::new(
@@ -100,7 +100,7 @@ where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
-    W: Repo<Redirect> + Send + Sync,
+    W: RepoByDropId<Redirect> + Send + Sync,
 {
     pub fn new(
         drop_repository: T,
@@ -158,7 +158,7 @@ where
     T: Repo<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
-    W: Repo<Redirect> + Send + Sync,
+    W: RepoByDropId<Redirect> + Send + Sync,
 {
     async fn create_drop(
         &self,
@@ -240,12 +240,13 @@ where
     }
 
     async fn find_redirect_from_drop_id(&self, drop_id: i32) -> Option<Redirect> {
-        match self.redirect_repository.get(drop_id).await {
+        match self.redirect_repository.get_by_drop_id(drop_id).await {
             Ok(redirect) => {
-                println!("drop found in repo");
+                println!("redirect found in repo");
                 Some(redirect)
             },
             Err(error) => {
+                println!("redirect not found in repo");
                 println!("{:?}", error);
                 None
             }

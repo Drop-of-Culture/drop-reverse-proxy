@@ -129,6 +129,32 @@ RETURNING id
         .await
 }
 
+async fn create_drop_with_type(pool: &PgPool, drop_name: &str, artwork_id: i32, type_id: i32) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"drop\" (name, artwork_id, type_id)
+VALUES ($1, $2, $3)
+RETURNING id
+")
+        .bind(drop_name)
+        .bind(artwork_id)
+        .bind(type_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn create_redirect(pool: &PgPool, drop_id: i32, name: &str, link: &str) -> Result<i32, Error> {
+    sqlx::query_scalar::<_, i32>("
+INSERT INTO \"redirect\" (drop_id, name, link)
+VALUES ($1, $2, $3)
+RETURNING id
+")
+        .bind(drop_id)
+        .bind(name)
+        .bind(link)
+        .fetch_one(pool)
+        .await
+}
+
 async fn create_artwork(pool: &PgPool, artwork_name: &str, artist_id: i32) -> Result<i32, Error> {
     sqlx::query_scalar::<_, i32>("
 INSERT INTO \"artwork\" (name, artist_id)
@@ -1162,4 +1188,117 @@ async fn get_tag_full_flow_impl() {
     assert_eq!(2, total_tokens);
     let ip = ip_repo.get(&client_ip).await.expect("ip not found in db");
     assert_eq!(1, *ip.nb_bad_attempts());
+}
+
+fn redirect_test_app_state(
+    token_repo: TokenRepo,
+    tag_repo: TagRepo,
+    drop_repo: DropRepo,
+    ip_repo: IpRepo,
+    redirect_repo: RedirectRepo,
+) -> AppState {
+    // redirect_uri is left empty: a redirect drop must never be proxied to Apache
+    let conf = Conf::new(String::from(""), String::from("127.0.0.1:8000"), 10, Vec::new(), String::from(""), None, None);
+    AppState {
+        token_repo: Arc::new(token_repo),
+        tag_repo: Arc::new(tag_repo),
+        ip_repo: Arc::new(ip_repo),
+        conf,
+        entity_repositories: Vec::new(),
+        service_conf: ServiceConf::new(
+            DropService::new(
+                Arc::new(drop_repo),
+                Arc::new(ArtistRepoMock::new()),
+                Arc::new(ArtworkRepoMock::new()),
+                Arc::new(redirect_repo),
+            )
+        ),
+    }
+}
+
+#[test]
+fn get_tag_on_redirect_drop_redirects_to_link() {
+    shared_runtime().block_on(get_tag_on_redirect_drop_redirects_to_link_impl());
+}
+
+// A drop with type_id 2 is a redirect drop: /tag/{tag} must answer with a
+// temporary redirect to the drop's redirect link, without issuing a token.
+async fn get_tag_on_redirect_drop_redirects_to_link_impl() {
+    let _db_guard = reset_db_for_test().await;
+    let pg_pool = &shared_pg_pool().await;
+
+    // Arrange: a first (playlist) drop is created so the redirect drop id and
+    // the redirect id differ, which ensures the redirect is looked up by drop id.
+    let artist_id = create_artist(pg_pool, "redirect_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "redirect artwork", artist_id).await.expect("error when creating artwork");
+    create_drop_with_type(pg_pool, "playlist drop", artwork_id, 0).await.expect("error when creating playlist drop");
+    let drop_id = create_drop_with_type(pg_pool, "redirect drop", artwork_id, 2).await.expect("error when creating redirect drop");
+    let link = "https://example.com/some/target?x=1";
+    let redirect_id = create_redirect(pg_pool, drop_id, "the redirect", link).await.expect("error when creating redirect");
+    assert_ne!(drop_id, redirect_id);
+    let tag_name = "redirect_tag";
+    create_tag(pg_pool, tag_name, drop_id).await.expect("error when creating tag");
+
+    let app_state = redirect_test_app_state(
+        token_repo().await, tag_repo().await, drop_repo().await, ip_repo().await, redirect_repo().await,
+    );
+
+    // Act
+    let mut req = Request::builder()
+        .uri(format!("/tag/{tag_name}"))
+        .body(Empty::new())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+    let response = app(app_state).oneshot(req).await.unwrap();
+
+    // Assert: temporary redirect to the link, no cookie, no token saved
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        response.headers().get(reqwest::header::LOCATION).expect("no location header"),
+        link
+    );
+    assert!(response.headers().get(SET_COOKIE).is_none());
+    let total_tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM \"token\"")
+        .fetch_one(pg_pool)
+        .await
+        .expect("failed to count tokens");
+    assert_eq!(0, total_tokens);
+}
+
+#[test]
+fn get_tag_on_redirect_drop_without_redirect_returns_404() {
+    shared_runtime().block_on(get_tag_on_redirect_drop_without_redirect_returns_404_impl());
+}
+
+async fn get_tag_on_redirect_drop_without_redirect_returns_404_impl() {
+    let _db_guard = reset_db_for_test().await;
+    let pg_pool = &shared_pg_pool().await;
+
+    // Arrange: a redirect drop (type_id 2) with no row in the redirect table
+    let artist_id = create_artist(pg_pool, "redirect_artist").await.expect("error when creating artist");
+    let artwork_id = create_artwork(pg_pool, "redirect artwork", artist_id).await.expect("error when creating artwork");
+    let drop_id = create_drop_with_type(pg_pool, "redirect drop", artwork_id, 2).await.expect("error when creating redirect drop");
+    let tag_name = "redirect_tag";
+    create_tag(pg_pool, tag_name, drop_id).await.expect("error when creating tag");
+
+    let app_state = redirect_test_app_state(
+        token_repo().await, tag_repo().await, drop_repo().await, ip_repo().await, redirect_repo().await,
+    );
+
+    // Act
+    let mut req = Request::builder()
+        .uri(format!("/tag/{tag_name}"))
+        .body(Empty::new())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+    let response = app(app_state).oneshot(req).await.unwrap();
+
+    // Assert: RedirectNotFound -> 404, no cookie, no token saved
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(response.headers().get(SET_COOKIE).is_none());
+    let total_tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM \"token\"")
+        .fetch_one(pg_pool)
+        .await
+        .expect("failed to count tokens");
+    assert_eq!(0, total_tokens);
 }

@@ -76,6 +76,27 @@ impl<E: Entity + std::marker::Sync> RepoByName<E> for Arc<dyn RepoByName<E>> {
     }
 }
 
+#[async_trait]
+pub trait RepoByDropId<E: Entity>: Send + Sync {
+    async fn get(&self, id: i32) -> Result<E, RepositoryError>;
+    async fn save_or_update(&self, entity: &E) -> Result<i32, RepositoryError>;
+    async fn get_by_drop_id(&self, drop_id: i32) -> Result<E, RepositoryError>;
+}
+
+#[async_trait]
+impl<E: Entity + std::marker::Sync> RepoByDropId<E> for Arc<dyn RepoByDropId<E>> {
+    async fn get(&self, id: i32) -> Result<E, RepositoryError> {
+        self.as_ref().get(id).await
+    }
+
+    async fn save_or_update(&self, entity: &E) -> Result<i32, RepositoryError> {
+        self.as_ref().save_or_update(entity).await
+    }
+    async fn get_by_drop_id(&self, drop_id: i32) -> Result<E, RepositoryError> {
+        self.as_ref().get_by_drop_id(drop_id).await
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum RepoType {
     Artist(std::sync::Arc<crate::repository::artist::ArtistRepo>),

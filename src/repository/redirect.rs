@@ -1,11 +1,10 @@
-use std::sync::Arc;
+use crate::config::db::{DatabaseConfig, create_pool};
+use crate::repository::{Entity, RepoByDropId, RepositoryError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derive_new::new;
-use sqlx::{PgPool, Pool, Postgres};
-use crate::config::db::{create_pool, DatabaseConfig};
-use crate::repository::{Entity, Repo, RepositoryError};
-use crate::repository::tag::TagRepo;
+use sqlx::{Execute, Pool, Postgres};
+use std::sync::Arc;
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Redirect {
@@ -51,23 +50,10 @@ impl RedirectRepo {
             Err(err) => Err(RepositoryError::DatabaseError(err))
         }
     }
-    
-    pub async fn get_by_drop_id(&self, drop_id: i32) -> Result< Redirect, RepositoryError > {
-            sqlx::query_as::<_, Redirect>("
-SELECT id, drop_id, create_date, update_date, name, link
-FROM \"redirect\"
-WHERE drop_id = $1
-LIMIT 1
-")
-                .bind(drop_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|_| RepositoryError::EntityNotFound)
-    }
 }
 
 #[async_trait]
-impl Repo<Redirect> for RedirectRepo {
+impl RepoByDropId<Redirect> for RedirectRepo {
     async fn get(&self, id: i32) -> Result<Redirect, RepositoryError> {
         sqlx::query_as::<_, Redirect>("
 SELECT id, drop_id, create_date, update_date, name, link
@@ -94,15 +80,34 @@ RETURNING id
             .await
             .map_err(|_| RepositoryError::EntityNotSaved)
     }
+
+    async fn get_by_drop_id(&self, drop_id: i32) -> Result<Redirect, RepositoryError> {
+        let req = sqlx::query_as::<_, Redirect>("
+SELECT id, drop_id, create_date, update_date, name, link
+FROM \"redirect\"
+WHERE drop_id = $1
+LIMIT 1
+")
+            .bind(drop_id);
+        println!("get_by_drop_id(): {} - {}", req.sql(), drop_id);
+
+            req.fetch_one(&self.pool)
+            .await
+            .map_err(|_| RepositoryError::EntityNotFound)
+    }
 }
 
 #[async_trait]
-impl Repo<Redirect> for Arc<RedirectRepo> {
+impl RepoByDropId<Redirect> for Arc<RedirectRepo> {
     async fn get(&self, id: i32) -> Result<Redirect, RepositoryError> {
         self.as_ref().get(id).await
     }
 
     async fn save_or_update(&self, entity: &Redirect) -> Result<i32, RepositoryError> {
         self.as_ref().save_or_update(entity).await
+    }
+
+    async fn get_by_drop_id(&self, drop_id: i32) -> Result<Redirect, RepositoryError> {
+        self.as_ref().get_by_drop_id(drop_id).await
     }
 }

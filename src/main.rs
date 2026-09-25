@@ -5,7 +5,7 @@ use drop_reverse_proxy::repository::drop::DropRepo;
 use drop_reverse_proxy::repository::tag::TagRepo;
 use drop_reverse_proxy::repository::ip::IpRepo;
 use drop_reverse_proxy::repository::token::TokenRepo;
-use drop_reverse_proxy::repository::{Repo, RepoByName};
+use drop_reverse_proxy::repository::{Repo, RepoByDropId, RepoByName};
 use drop_reverse_proxy::service::drop::DropService;
 use drop_reverse_proxy::{AppState, ServiceConf, app, create_conf_from_toml_file};
 use std::net::SocketAddr;
@@ -62,7 +62,7 @@ async fn main() {
             Arc::new(drop_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::drop::Drop>>,
             Arc::new(artist_repository) as Arc<dyn RepoByName<drop_reverse_proxy::repository::artist::Artist>>,
             Arc::new(artwork_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::artwork::Artwork>>,
-            Arc::new(redirect_repo) as Arc<dyn Repo<drop_reverse_proxy::repository::redirect::Redirect>>,
+            Arc::new(redirect_repo) as Arc<dyn RepoByDropId<drop_reverse_proxy::repository::redirect::Redirect>>,
         );
         let app_state = AppState {
             token_repo: Arc::new(token_repo.clone()),

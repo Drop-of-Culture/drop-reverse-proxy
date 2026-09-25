@@ -1,7 +1,7 @@
 use crate::repository::artist::Artist;
 use crate::repository::artwork::Artwork;
 use crate::repository::token::Token;
-use crate::repository::{Repo, RepoByName, RepositoryError};
+use crate::repository::{Repo, RepoByDropId, RepoByName, RepositoryError};
 use crate::service::DropServiceT;
 use crate::service::drop::DropService;
 use axum::extract::{ConnectInfo, Path, Request, State};
@@ -607,7 +607,7 @@ pub struct ServiceConf {
         Arc<dyn Repo<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
         Arc<dyn Repo<Artwork>>,
-        Arc<dyn Repo<repository::redirect::Redirect>>,
+        Arc<dyn RepoByDropId<repository::redirect::Redirect>>,
     >
 }
 
@@ -626,7 +626,7 @@ impl ServiceConf {
         Arc<dyn Repo<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
         Arc<dyn Repo<Artwork>>,
-        Arc<dyn Repo<repository::redirect::Redirect>>> {
+        Arc<dyn RepoByDropId<repository::redirect::Redirect>>> {
         &self.drop_service
     }
 }

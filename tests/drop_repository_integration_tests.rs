@@ -30,7 +30,8 @@ async fn should_insert_data() {
             id SERIAL PRIMARY KEY,
             artwork_id INTEGER NOT NULL,
             name VARCHAR(255) NOT NULL,
-            dir VARCHAR(128) NOT NULL DEFAULT ''
+            dir VARCHAR(128) NOT NULL DEFAULT '',
+            type_id INTEGER NOT NULL DEFAULT 0
         )
         "#
     )

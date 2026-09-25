@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use drop_reverse_proxy::repository::redirect::Redirect;
-use drop_reverse_proxy::repository::Repo;
+use drop_reverse_proxy::repository::RepoByDropId;
 use drop_reverse_proxy::repository::RepositoryError;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -17,17 +17,10 @@ impl RedirectRepoMock {
     pub fn map(&self) -> &Arc<RwLock<HashMap<i32, Redirect>>> {
         &self.map
     }
-
-    pub async fn get_by_drop_id(&self, drop_id: i32) -> Result<Redirect, RepositoryError> {
-        match self.map().read().unwrap().values().find(|redirect| redirect.drop_id == drop_id) {
-            Some(redirect) => Ok(redirect.clone()),
-            None => Err(RepositoryError::EntityNotFound)
-        }
-    }
 }
 
 #[async_trait]
-impl Repo<Redirect> for RedirectRepoMock {
+impl RepoByDropId<Redirect> for RedirectRepoMock {
     async fn get(&self, id: i32) -> Result<Redirect, RepositoryError> {
         match self.map().read().unwrap().get(&id) {
             Some(redirect) => Ok(redirect.clone()),
@@ -38,6 +31,13 @@ impl Repo<Redirect> for RedirectRepoMock {
     async fn save_or_update(&self, entity: &Redirect) -> Result<i32, RepositoryError> {
         self.map.write().unwrap().insert(entity.id(), entity.clone());
         Ok(entity.id())
+    }
+
+    async fn get_by_drop_id(&self, drop_id: i32) -> Result<Redirect, RepositoryError> {
+        match self.map().read().unwrap().values().find(|redirect| redirect.drop_id == drop_id) {
+            Some(redirect) => Ok(redirect.clone()),
+            None => Err(RepositoryError::EntityNotFound)
+        }
     }
 }
 
