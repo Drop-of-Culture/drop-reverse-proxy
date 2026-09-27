@@ -85,7 +85,7 @@ RETURNING id
             .await
             .map_err(|e| {
                 println!("insert error: {:?}", e);
-                return RepositoryError::EntityNotSaved
+                RepositoryError::EntityNotSaved
             })
     }
 }

@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use crate::config::db::{DatabaseConfig, create_pool};
+use crate::repository::{Entity, Repo, RepositoryError};
 use async_trait::async_trait;
-use crate::config::db::{create_pool, DatabaseConfig};
-use crate::repository::{Entity, Repo, RepoByUuid, RepositoryError};
 use derive_new::new;
 use sqlx::{Execute, Pool, Postgres};
+use std::sync::Arc;
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Drop {
