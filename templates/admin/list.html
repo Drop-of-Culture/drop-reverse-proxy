@@ -1,0 +1,34 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="actions">
+  <h1>{{ title }}</h1>
+  {% if let Some(url) = new_url %}<a href="{{ url }}">New</a>{% endif %}
+</div>
+{% if let Some(note) = note %}<p class="muted">{{ note }}</p>{% endif %}
+{% if rows.is_empty() %}
+<p class="muted">Nothing yet.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+  <thead><tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}<th></th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      {% for cell in row.cells %}<td>{{ cell }}</td>{% endfor %}
+      <td class="actions">
+        {% if let Some(url) = row.edit_url %}<a href="{{ url }}">Edit</a>{% endif %}
+        {% for action in row.actions %}
+        <form class="inline" method="post" action="{{ action.url }}"
+              onsubmit="return confirm('{{ action.label }}?')">
+          <button{% if action.danger %} class="danger"{% endif %} type="submit">{{ action.label }}</button>
+        </form>
+        {% endfor %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

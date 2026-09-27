@@ -1,22 +1,19 @@
-//! Artist CRUD. Serves as the pattern for the other entities.
+//! Artist CRUD. The other content entities follow the same pattern.
 
 use crate::admin::audit::{self, Action};
 use crate::admin::auth::AdminUser;
 use crate::admin::error::AdminError;
-use crate::admin::{AdminState, render};
-use crate::repository::artist::Artist;
-use askama::Template;
+use crate::admin::page::{Field, FormPage, ListPage, Row, delete_action, redirect_to, required};
+use crate::admin::AdminState;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Form, Router};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 
 const ENTITY: &str = "artist";
-const NAME_MAX_LEN: usize = 255;
+const LIST_URL: &str = "/artists";
 
 pub fn routes() -> Router<AdminState> {
     Router::new()
@@ -27,50 +24,20 @@ pub fn routes() -> Router<AdminState> {
         .route("/artists/{id}/delete", post(delete))
 }
 
-#[derive(sqlx::FromRow, Debug)]
-pub struct ArtistRow {
-    pub id: i32,
-    pub name: String,
-    pub artwork_count: i64,
+#[derive(sqlx::FromRow, Serialize, Debug)]
+struct ArtistRecord {
+    id: i32,
+    name: String,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct ArtistForm {
+struct ArtistForm {
     name: String,
-}
-
-impl ArtistForm {
-    fn validated_name(&self) -> Result<String, String> {
-        let name = self.name.trim();
-        if name.is_empty() {
-            Err("Name is required.".to_string())
-        } else if name.chars().count() > NAME_MAX_LEN {
-            Err(format!("Name must be at most {NAME_MAX_LEN} characters."))
-        } else {
-            Ok(name.to_string())
-        }
-    }
-}
-
-#[derive(Template)]
-#[template(path = "admin/artist/list.html")]
-struct ListTemplate {
-    admin: AdminUser,
-    artists: Vec<ArtistRow>,
-}
-
-#[derive(Template)]
-#[template(path = "admin/artist/form.html")]
-struct FormTemplate {
-    admin: AdminUser,
-    artist_id: Option<i32>,
-    name: String,
-    error: Option<String>,
 }
 
 async fn list(admin: AdminUser, State(state): State<AdminState>) -> Result<Response, AdminError> {
-    let artists = sqlx::query_as::<_, ArtistRow>("
-SELECT a.id, a.name, COUNT(aw.id) AS artwork_count
+    let artists = sqlx::query_as::<_, (i32, String, i64)>("
+SELECT a.id, a.name, COUNT(aw.id)
 FROM \"artist\" a
 LEFT JOIN \"artwork\" aw ON aw.artist_id = a.id
 GROUP BY a.id, a.name
@@ -78,120 +45,108 @@ ORDER BY a.name
 ")
         .fetch_all(&state.pool)
         .await?;
-    Ok(render(&ListTemplate { admin, artists })?.into_response())
+
+    let rows = artists.into_iter().map(|(id, name, artworks)| Row {
+        cells: vec![id.to_string(), name, artworks.to_string()],
+        edit_url: Some(format!("/artists/{id}/edit")),
+        actions: delete_action(&admin, format!("/artists/{id}/delete")),
+    }).collect();
+
+    ListPage {
+        admin,
+        title: "Artists",
+        note: None,
+        new_url: Some("/artists/new"),
+        columns: vec!["Id", "Name", "Artworks"],
+        rows,
+    }.respond()
+}
+
+fn form(admin: AdminUser, id: Option<i32>, form: ArtistForm, error: Option<String>) -> FormPage {
+    FormPage {
+        admin,
+        title: id.map_or("New artist".to_string(), |id| format!("Edit artist #{id}")),
+        action: id.map_or(LIST_URL.to_string(), |id| format!("/artists/{id}")),
+        cancel_url: LIST_URL,
+        fields: vec![Field::text("name", "Name", form.name, 255)],
+        error,
+    }
 }
 
 async fn new_form(admin: AdminUser) -> Result<Response, AdminError> {
-    Ok(render(&FormTemplate { admin, artist_id: None, name: String::new(), error: None })?.into_response())
+    form(admin, None, ArtistForm { name: String::new() }, None).respond()
 }
 
-async fn edit_form(
-    admin: AdminUser,
-    State(state): State<AdminState>,
-    Path(id): Path<i32>,
-) -> Result<Response, AdminError> {
+async fn edit_form(admin: AdminUser, State(state): State<AdminState>, Path(id): Path<i32>) -> Result<Response, AdminError> {
     let mut conn = state.pool.acquire().await?;
     let artist = fetch(&mut conn, id, false).await?;
-    Ok(render(&FormTemplate {
-        admin,
-        artist_id: Some(artist.id()),
-        name: artist.name().to_string(),
-        error: None,
-    })?.into_response())
+    form(admin, Some(id), ArtistForm { name: artist.name }, None).respond()
 }
 
-async fn create(
-    admin: AdminUser,
-    State(state): State<AdminState>,
-    Form(form): Form<ArtistForm>,
-) -> Result<Response, AdminError> {
-    let name = match form.validated_name() {
+async fn create(admin: AdminUser, State(state): State<AdminState>, Form(input): Form<ArtistForm>) -> Result<Response, AdminError> {
+    let name = match required(&input.name, "Name", 255) {
         Ok(name) => name,
-        Err(error) => return invalid_form(admin, None, form.name, error),
+        Err(error) => return form(admin, None, input, Some(error)).respond(),
     };
 
     let mut tx = state.pool.begin().await?;
-    let artist = sqlx::query_as::<_, Artist>("
-INSERT INTO \"artist\" (name)
-VALUES ($1)
-RETURNING id, name
-")
+    let artist = sqlx::query_as::<_, ArtistRecord>("INSERT INTO \"artist\" (name) VALUES ($1) RETURNING id, name")
         .bind(&name)
         .fetch_one(&mut *tx)
         .await?;
-    audit::record(&mut tx, &admin, ENTITY, &artist.id().to_string(), Action::Create, None, Some(to_json(&artist))).await?;
+    audit::record_change(&mut tx, &admin, ENTITY, artist.id, Action::Create, None, Some(&artist)).await?;
     tx.commit().await?;
 
-    Ok(Redirect::to("/artists").into_response())
+    redirect_to(LIST_URL)
 }
 
 async fn update(
     admin: AdminUser,
     State(state): State<AdminState>,
     Path(id): Path<i32>,
-    Form(form): Form<ArtistForm>,
+    Form(input): Form<ArtistForm>,
 ) -> Result<Response, AdminError> {
-    let name = match form.validated_name() {
+    let name = match required(&input.name, "Name", 255) {
         Ok(name) => name,
-        Err(error) => return invalid_form(admin, Some(id), form.name, error),
+        Err(error) => return form(admin, Some(id), input, Some(error)).respond(),
     };
 
     let mut tx = state.pool.begin().await?;
     let before = fetch(&mut tx, id, true).await?;
-    let after = sqlx::query_as::<_, Artist>("
-UPDATE \"artist\"
-SET name = $1
-WHERE id = $2
-RETURNING id, name
-")
+    let after = sqlx::query_as::<_, ArtistRecord>("UPDATE \"artist\" SET name = $1 WHERE id = $2 RETURNING id, name")
         .bind(&name)
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
-    audit::record(&mut tx, &admin, ENTITY, &id.to_string(), Action::Update, Some(to_json(&before)), Some(to_json(&after))).await?;
+    audit::record_change(&mut tx, &admin, ENTITY, id, Action::Update, Some(&before), Some(&after)).await?;
     tx.commit().await?;
 
-    Ok(Redirect::to("/artists").into_response())
+    redirect_to(LIST_URL)
 }
 
-async fn delete(
-    admin: AdminUser,
-    State(state): State<AdminState>,
-    Path(id): Path<i32>,
-) -> Result<Response, AdminError> {
+async fn delete(admin: AdminUser, State(state): State<AdminState>, Path(id): Path<i32>) -> Result<Response, AdminError> {
     admin.require_owner()?;
 
     let mut tx = state.pool.begin().await?;
     let before = fetch(&mut tx, id, true).await?;
-    // fails with a Conflict while artworks still reference the artist
-    sqlx::query("DELETE FROM \"artist\" WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    audit::record(&mut tx, &admin, ENTITY, &id.to_string(), Action::Delete, Some(to_json(&before)), None).await?;
+    // refused (409) while artworks still reference the artist
+    sqlx::query("DELETE FROM \"artist\" WHERE id = $1").bind(id).execute(&mut *tx).await?;
+    audit::record_change(&mut tx, &admin, ENTITY, id, Action::Delete, Some(&before), None).await?;
     tx.commit().await?;
 
-    Ok(Redirect::to("/artists").into_response())
+    redirect_to(LIST_URL)
 }
 
-async fn fetch(conn: &mut PgConnection, id: i32, for_update: bool) -> Result<Artist, AdminError> {
+async fn fetch(conn: &mut PgConnection, id: i32, for_update: bool) -> Result<ArtistRecord, AdminError> {
     let query = if for_update {
         "SELECT id, name FROM \"artist\" WHERE id = $1 FOR UPDATE"
     } else {
         "SELECT id, name FROM \"artist\" WHERE id = $1"
     };
-    sqlx::query_as::<_, Artist>(query)
+    sqlx::query_as::<_, ArtistRecord>(query)
         .bind(id)
         .fetch_optional(conn)
         .await?
         .ok_or(AdminError::NotFound)
 }
 
-fn invalid_form(admin: AdminUser, artist_id: Option<i32>, name: String, error: String) -> Result<Response, AdminError> {
-    let page = render(&FormTemplate { admin, artist_id, name, error: Some(error) })?;
-    Ok((StatusCode::UNPROCESSABLE_ENTITY, page).into_response())
-}
-
-fn to_json(artist: &Artist) -> Value {
-    json!({ "id": artist.id(), "name": artist.name() })
-}

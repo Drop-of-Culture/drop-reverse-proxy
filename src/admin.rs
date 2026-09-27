@@ -17,10 +17,21 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
 
+pub mod admin_user;
 pub mod artist;
+pub mod artwork;
 pub mod audit;
+pub mod audit_log;
 pub mod auth;
+pub mod drop;
+pub mod drop_type;
 pub mod error;
+pub mod ip;
+pub mod page;
+pub mod playlist;
+pub mod redirect;
+pub mod tag;
+pub mod token;
 
 use auth::AdminUser;
 use error::AdminError;
@@ -55,12 +66,24 @@ pub fn create_admin_conf_from_toml_file(relative_path: &str) -> figment::Result<
 pub struct AdminState {
     pub pool: PgPool,
     pub allowed_origin: Arc<str>,
+    /// Bad attempts from which the proxy refuses an IP (`max_attempts` in app.toml).
+    pub max_attempts: u8,
 }
 
 pub fn admin_app(state: AdminState) -> Router {
     Router::new()
         .route("/", get(index))
         .merge(artist::routes())
+        .merge(artwork::routes())
+        .merge(drop::routes())
+        .merge(drop_type::routes())
+        .merge(tag::routes())
+        .merge(redirect::routes())
+        .merge(playlist::routes())
+        .merge(token::routes())
+        .merge(ip::routes())
+        .merge(admin_user::routes())
+        .merge(audit_log::routes())
         // layers run bottom-up: identify the admin first, then check the origin
         .layer(from_fn_with_state(state.clone(), auth::check_origin))
         .layer(from_fn_with_state(state.clone(), auth::require_admin))

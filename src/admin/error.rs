@@ -20,9 +20,13 @@ impl From<sqlx::Error> for AdminError {
         match &err {
             sqlx::Error::RowNotFound => AdminError::NotFound,
             sqlx::Error::Database(db_err) => match db_err.code().as_deref() {
-                // foreign_key_violation
+                // foreign_key_violation: on insert/update the referenced row is missing,
+                // on delete the row is still referenced
+                Some("23503") if db_err.message().starts_with("insert or update") => {
+                    AdminError::Validation("A selected item no longer exists.".to_string())
+                }
                 Some("23503") => AdminError::Conflict(
-                    "This item is still referenced by other items.".to_string(),
+                    "This item is still used by other items, remove or change them first.".to_string(),
                 ),
                 // unique_violation
                 Some("23505") => AdminError::Conflict("This item already exists.".to_string()),

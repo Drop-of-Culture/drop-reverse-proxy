@@ -1,0 +1,26 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<form method="post" action="{{ action }}">
+  {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+  {% for field in fields %}
+  <label for="{{ field.name }}">{{ field.label }}</label>
+  {% if let Some(choices) = field.choices %}
+  <select id="{{ field.name }}" name="{{ field.name }}" required>
+    {% for choice in choices %}
+    <option value="{{ choice.value }}"{% if choice.value == field.value %} selected{% endif %}>{{ choice.label }}</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <input id="{{ field.name }}" name="{{ field.name }}" type="{{ field.input_type }}" value="{{ field.value }}"
+         {% if field.max_len > 0 %}maxlength="{{ field.max_len }}"{% endif %}{% if field.required %} required{% endif %}>
+  {% endif %}
+  {% if !field.help.is_empty() %}<small class="muted">{{ field.help }}</small>{% endif %}
+  {% endfor %}
+  <p class="actions">
+    <button type="submit">Save</button>
+    <a href="{{ cancel_url }}">Cancel</a>
+  </p>
+</form>
+{% endblock %}

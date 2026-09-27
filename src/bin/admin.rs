@@ -43,7 +43,7 @@ async fn main() {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        [] => serve(pool, admin_conf.bind_addr(), admin_conf.allowed_origin()).await,
+        [] => serve(pool, admin_conf.bind_addr(), admin_conf.allowed_origin(), conf.max_attempts()).await,
         ["add-admin", login, role @ ("owner" | "editor")] => add_admin(&pool, login, role).await,
         ["disable-admin", login] => disable_admin(&pool, login).await,
         _ => {
@@ -53,7 +53,7 @@ async fn main() {
     }
 }
 
-async fn serve(pool: PgPool, bind_addr: &str, allowed_origin: &str) {
+async fn serve(pool: PgPool, bind_addr: &str, allowed_origin: &str, max_attempts: u8) {
     let addr: SocketAddr = bind_addr.parse().expect("admin_conf.bind_addr is not a valid socket address");
     // the app trusts the X-Forwarded-User header: only oauth2-proxy must be able to reach it
     assert!(
@@ -61,7 +61,7 @@ async fn serve(pool: PgPool, bind_addr: &str, allowed_origin: &str) {
         "admin_conf.bind_addr must be a loopback address (got {addr}), the admin app trusts X-Forwarded-User"
     );
 
-    let state = AdminState { pool, allowed_origin: Arc::from(allowed_origin) };
+    let state = AdminState { pool, allowed_origin: Arc::from(allowed_origin), max_attempts };
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     println!("Admin listening on {addr}");
     axum::serve(listener, admin_app(state)).await.unwrap();

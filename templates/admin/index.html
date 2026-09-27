@@ -1,7 +1,19 @@
 {% extends "admin/base.html" %}
 {% block content %}
 <h1>Back-office</h1>
+<h2>Content</h2>
 <ul>
   <li><a href="/artists">Artists</a></li>
+  <li><a href="/artworks">Artworks</a></li>
+  <li><a href="/drops">Drops</a> and their <a href="/drop-types">types</a></li>
+  <li><a href="/tags">Tags</a>: the public <code>/tag/…</code> links to drops</li>
+  <li><a href="/redirects">Redirects</a> and <a href="/playlists">playlists</a> of drops</li>
+</ul>
+<h2>Operations</h2>
+<ul>
+  <li><a href="/tokens">Tokens</a> issued to visitors</li>
+  <li><a href="/ips">IPs</a> and bans</li>
+  <li><a href="/audit">Audit log</a></li>
+  {% if admin.is_owner() %}<li><a href="/admins">Admins</a></li>{% endif %}
 </ul>
 {% endblock %}

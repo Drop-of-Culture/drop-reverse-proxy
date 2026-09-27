@@ -1,4 +1,6 @@
 use crate::admin::auth::AdminUser;
+use crate::admin::error::AdminError;
+use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgConnection;
 
@@ -42,5 +44,25 @@ VALUES ($1, $2, $3, $4, $5, $6)
         .bind(after)
         .execute(conn)
         .await?;
+    Ok(())
+}
+
+/// Same as [`record`], serializing the records before and after the change.
+pub async fn record_change<T: Serialize>(
+    conn: &mut PgConnection,
+    admin: &AdminUser,
+    entity: &str,
+    entity_id: impl ToString,
+    action: Action,
+    before: Option<&T>,
+    after: Option<&T>,
+) -> Result<(), AdminError> {
+    let to_json = |record: Option<&T>| {
+        record
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|err| AdminError::Internal(err.to_string()))
+    };
+    record(conn, admin, entity, &entity_id.to_string(), action, to_json(before)?, to_json(after)?).await?;
     Ok(())
 }

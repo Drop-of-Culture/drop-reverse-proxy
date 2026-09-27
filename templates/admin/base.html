@@ -10,9 +10,9 @@
       :root { --fg: #f2f2f7; --muted: #a1a1a6; --bg: #1c1c1e; --line: #3a3a3c; --accent: #6ea8fe; --danger: #f97066; }
     }
     body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
-    header { display: flex; gap: 1.5rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--line); }
-    header nav { display: flex; gap: 1rem; flex: 1; }
-    main { max-width: 960px; margin: 0 auto; padding: 1rem; }
+    header { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--line); }
+    header nav { display: flex; flex-wrap: wrap; gap: .25rem 1rem; flex: 1; }
+    main { max-width: 1100px; margin: 0 auto; padding: 1rem; }
     a { color: var(--accent); }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
@@ -23,7 +23,10 @@
     button { font: inherit; cursor: pointer; }
     button.danger { color: var(--danger); }
     label { display: block; margin: .75rem 0 .25rem; }
-    input[type=text] { font: inherit; width: 100%; max-width: 30rem; padding: .35rem; }
+    input, select { font: inherit; width: 100%; max-width: 30rem; padding: .35rem; box-sizing: border-box; }
+    small { display: block; margin-top: .2rem; }
+    .table-wrap { overflow-x: auto; }
+    td { overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -31,6 +34,16 @@
     <strong>Drop of Culture admin</strong>
     <nav>
       <a href="/artists">Artists</a>
+      <a href="/artworks">Artworks</a>
+      <a href="/drops">Drops</a>
+      <a href="/tags">Tags</a>
+      <a href="/redirects">Redirects</a>
+      <a href="/playlists">Playlists</a>
+      <a href="/drop-types">Drop types</a>
+      <a href="/tokens">Tokens</a>
+      <a href="/ips">IPs</a>
+      <a href="/audit">Audit log</a>
+      {% if admin.is_owner() %}<a href="/admins">Admins</a>{% endif %}
     </nav>
     <span class="muted">{{ admin.github_login }}{% if admin.is_owner() %} (owner){% endif %}</span>
     <a href="/oauth2/sign_out">Sign out</a>
