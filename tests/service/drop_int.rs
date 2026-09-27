@@ -113,7 +113,8 @@ async fn test_create_drop_with_new_artist_name() {
 
     // Verify file system
     // The artwork ID should be 1
-    let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 0));
+    // first row of the artwork SERIAL column
+    let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 1));
     assert!(artwork_dir.exists());
     assert!(artwork_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 1)).exists());
     assert!(artwork_dir.join(format!("{}{}", TRACK_FILE_PREFIX, 2)).exists());
@@ -152,7 +153,8 @@ async fn test_create_drop_with_existing_artist_id() {
 
     service.create_drop(&import_path, drop_request, &web_server_path).await.expect("Failed to create drop");
 
-    let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 0));
+    // first row of the artwork SERIAL column
+    let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 1));
     assert!(artwork_dir.exists());
 }
 
@@ -306,6 +308,38 @@ async fn test_find_drop_after_create_drop() {
     assert_eq!(found.id(), 1);
     // no drop_name in the request: the drop is named after the artwork
     assert_eq!(found.name(), "Artwork");
-    assert_eq!(found.artwork_id(), 0);
-    assert_eq!(found.dir(), format!("{}/{}{}", web_server_path, ARTWORK_DIR_PREFIX, 0));
+    assert_eq!(found.artwork_id(), 1);
+    assert_eq!(found.dir(), format!("{}/{}{}", web_server_path, ARTWORK_DIR_PREFIX, 1));
+}
+
+#[tokio::test]
+async fn test_successive_imports_create_distinct_artworks() {
+    let (db_config, _db_guard) = setup_db().await;
+
+    let artist_repo = Arc::new(ArtistRepo::new(&db_config).await.unwrap());
+    let drop_repo = Arc::new(DropRepo::new(&db_config).await.unwrap());
+    let artwork_repo = Arc::new(ArtworkRepo::new(&db_config).await.unwrap());
+    let redirect_repo = Arc::new(RedirectRepo::new(&db_config).await.unwrap());
+
+    let service = DropService::new(drop_repo, artist_repo.clone(), artwork_repo, redirect_repo);
+
+    let artist_id = artist_repo.save_or_update(&Artist::new(0, "Some Artist".to_string())).await.unwrap();
+    let temp_web_server_dir = TempDir::new().unwrap();
+    let web_server_path = temp_web_server_dir.path().to_str().unwrap().to_string();
+
+    // used to fail on the second import: every artwork was inserted with id 0
+    for (artwork_name, drop_id) in [("First", 1), ("Second", 2)] {
+        let temp_import_dir = TempDir::new().unwrap();
+        let import_path = temp_import_dir.path().to_str().unwrap().to_string();
+        fs::write(temp_import_dir.path().join("t1.mp3"), "c1").unwrap();
+
+        let drop_request = DropRequest::new(Some(artist_id), None, artwork_name.to_string(), vec!["t1.mp3".to_string()]);
+        service.create_drop(&import_path, drop_request, &web_server_path).await
+            .unwrap_or_else(|_| panic!("import of {artwork_name} failed"));
+
+        let drop = service.find_drop(drop_id).await.expect("Created drop should be found");
+        assert_eq!(drop.name(), artwork_name);
+        assert_eq!(drop.artwork_id(), drop_id);
+        assert!(temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, drop_id)).exists());
+    }
 }

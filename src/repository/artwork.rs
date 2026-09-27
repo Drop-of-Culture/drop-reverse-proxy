@@ -73,12 +73,12 @@ LIMIT 1
     }
 
     async fn save_or_update(&self, artwork: &Artwork) -> Result<i32, RepositoryError> {
+        // the id is assigned by the database: artwork.id is ignored
         sqlx::query_scalar::<_, i32>("
-INSERT INTO \"artwork\" (id, artist_id, name)
-VALUES ($1, $2, $3)
+INSERT INTO \"artwork\" (artist_id, name)
+VALUES ($1, $2)
 RETURNING id
     ")
-            .bind(artwork.id)
             .bind(artwork.artist_id)
             .bind(artwork.name.clone())
             .fetch_one(&self.pool)
