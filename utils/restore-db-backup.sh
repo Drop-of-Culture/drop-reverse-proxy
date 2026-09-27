@@ -1,0 +1,1 @@
+docker exec -i db psql -U <USER> -d <DATABASE> < ./backups/<file>.sql
