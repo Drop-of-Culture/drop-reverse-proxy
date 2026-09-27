@@ -304,7 +304,8 @@ async fn test_find_drop_after_create_drop() {
     // First inserted row of a SERIAL column gets id 1
     let found = service.find_drop(1).await.expect("Created drop should be found");
     assert_eq!(found.id(), 1);
-    assert_eq!(found.name(), "Some Artist");
+    // no drop_name in the request: the drop is named after the artwork
+    assert_eq!(found.name(), "Artwork");
     assert_eq!(found.artwork_id(), 0);
     assert_eq!(found.dir(), format!("{}/{}{}", web_server_path, ARTWORK_DIR_PREFIX, 0));
 }

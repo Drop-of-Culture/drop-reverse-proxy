@@ -47,7 +47,8 @@ async fn test_create_drop_success_with_artist_id() {
 
     let drop_result = service.find_drop(0).await;
     assert!(drop_result.is_some());
-    assert!(drop_result.unwrap().name().len() > 0);
+    // no drop_name in the request: the drop is named after the artwork
+    assert_eq!(drop_result.unwrap().name(), "Artwork Name");
 }
 
 #[tokio::test]
@@ -75,13 +76,16 @@ async fn test_create_drop_success_with_artist_name() {
         Some(artist_name.to_string()),
         "Artwork Name".to_string(),
         vec!["track1.mp3".to_string()]
-    );
+    ).with_drop_name("Summer drop".to_string());
 
     let result: Result<(), ImportError> = service.create_drop(&import_path, drop_request, &web_server_path).await;
     assert!(result.is_ok());
 
     let artwork_dir = temp_web_server_dir.path().join(format!("{}{}", ARTWORK_DIR_PREFIX, 0));
     assert!(artwork_dir.exists());
+
+    let drop = service.find_drop(0).await.expect("drop not saved");
+    assert_eq!(drop.name(), "Summer drop");
 }
 
 #[tokio::test]

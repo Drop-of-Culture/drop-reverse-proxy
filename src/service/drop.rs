@@ -44,6 +44,9 @@ pub struct DropRequest {
     artist_id: Option<i32>,
     artist_name: Option<String>,
     artwork_name: String,
+    /// Name of the drop, the artwork name when absent.
+    #[new(default)]
+    drop_name: Option<String>,
     tracks: Vec<String>
 }
 
@@ -58,6 +61,15 @@ impl DropRequest {
 
     pub fn artwork_name(&self) -> &str {
         &self.artwork_name
+    }
+
+    pub fn drop_name(&self) -> &str {
+        self.drop_name.as_deref().unwrap_or(&self.artwork_name)
+    }
+
+    pub fn with_drop_name(mut self, drop_name: String) -> Self {
+        self.drop_name = Some(drop_name);
+        self
     }
 
     pub fn tracks(&self) -> &Vec<String> {
@@ -166,6 +178,7 @@ where
         drop_request: DropRequest,
         web_server_path: &String
     ) -> Result<(), ImportError> {
+        let drop_name = drop_request.drop_name().to_string();
 
         // artist_id XOR artist_name
         if drop_request.artist_id.is_some() && drop_request.artist_name.is_some() {
@@ -204,7 +217,7 @@ where
         // create drop
         let _drop_id = self.drop_repository
             // type_id hard coded to 0 for playlist
-            .save_or_update(&Drop::new(0, artwork_id, artist.name().to_string(), artwork_dir_path.clone(), 0))
+            .save_or_update(&Drop::new(0, artwork_id, drop_name, artwork_dir_path.clone(), 0))
             .await
             .or(Err(ImportError::CantCreateDropFromDropRequest))?;
 

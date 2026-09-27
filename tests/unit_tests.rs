@@ -56,6 +56,8 @@ fn create_drop_from_toml_file_should_return_drop_struct() {
     let drop = drop.unwrap();
     assert_eq!("Cool Rasta", drop.artist_name().as_ref().unwrap());
     assert_eq!("Rasta's playlist", drop.artwork_name());
+    // no drop_name in the file: defaults to the artwork name
+    assert_eq!("Rasta's playlist", drop.drop_name());
     assert_eq!(3, drop.tracks().len());
     assert!(drop.tracks().contains(&"track001.mp3".to_string()));
     assert!(drop.tracks().contains(&"track002.mp3".to_string()));
