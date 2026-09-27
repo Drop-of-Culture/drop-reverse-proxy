@@ -12,4 +12,11 @@ db_user = "dropofculture"
 db_password = "dropofculture"
 db_pool_size = 10
 db_timeout = 10000
+# tables live in this schema (defaults to public)
+db_schema = "dropofculture"
 
+
+[admin_conf]
+bind_addr = '127.0.0.1:8081'
+# origin of the admin pages as seen by the browser (the oauth2-proxy address)
+allowed_origin = 'http://localhost:4180'

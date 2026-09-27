@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Admin{% endblock %} · Drop of Culture</title>
+  <style>
+    :root { --fg: #1d1d1f; --muted: #6e6e73; --bg: #fff; --line: #e5e5ea; --accent: #0a58ca; --danger: #b42318; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #f2f2f7; --muted: #a1a1a6; --bg: #1c1c1e; --line: #3a3a3c; --accent: #6ea8fe; --danger: #f97066; }
+    }
+    body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    header { display: flex; gap: 1.5rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--line); }
+    header nav { display: flex; gap: 1rem; flex: 1; }
+    main { max-width: 960px; margin: 0 auto; padding: 1rem; }
+    a { color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
+    .muted { color: var(--muted); }
+    .error { color: var(--danger); }
+    .actions { display: flex; gap: .75rem; align-items: center; }
+    form.inline { display: inline; }
+    button { font: inherit; cursor: pointer; }
+    button.danger { color: var(--danger); }
+    label { display: block; margin: .75rem 0 .25rem; }
+    input[type=text] { font: inherit; width: 100%; max-width: 30rem; padding: .35rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Drop of Culture admin</strong>
+    <nav>
+      <a href="/artists">Artists</a>
+    </nav>
+    <span class="muted">{{ admin.github_login }}{% if admin.is_owner() %} (owner){% endif %}</span>
+    <a href="/oauth2/sign_out">Sign out</a>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

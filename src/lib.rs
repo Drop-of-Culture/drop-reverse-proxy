@@ -34,6 +34,7 @@ pub const TAG_ARCHIVE_PREFIX: &str = "drop_";
 pub mod repository;
 pub mod service;
 pub mod config;
+pub mod admin;
 
 pub fn app(state: AppState) -> Router {
     Router::new()
@@ -639,7 +640,8 @@ pub struct DbConf {
     db_user: String,
     db_password: String,
     db_pool_size: u32,
-    db_timeout: u64
+    db_timeout: u64,
+    db_schema: Option<String>,
 }
 
 impl DbConf {
@@ -667,6 +669,10 @@ impl DbConf {
 
     pub fn db_timeout(&self) -> u64 {
         self.db_timeout
+    }
+
+    pub fn db_schema(&self) -> &str {
+        self.db_schema.as_deref().unwrap_or(config::db::DEFAULT_SCHEMA)
     }
 }
 

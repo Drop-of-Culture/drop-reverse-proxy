@@ -34,6 +34,8 @@ pub fn create_default_db_config(host: String, port: u16, db_name: &str, user: &s
         database: db_name.to_string(),
         username: user.to_string(),
         password: password.to_string(),
+        // not the default one, so tests also cover creating the schema
+        schema: "dropofculture".to_string(),
         max_connections: 10,
         min_connections: 1,
         connect_timeout: Duration::from_secs(5),

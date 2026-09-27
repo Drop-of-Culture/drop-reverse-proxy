@@ -1,0 +1,18 @@
+{% extends "admin/base.html" %}
+{% block title %}{% if artist_id.is_some() %}Edit artist{% else %}New artist{% endif %}{% endblock %}
+{% block content %}
+{% if let Some(id) = artist_id %}
+<h1>Edit artist #{{ id }}</h1>
+{% else %}
+<h1>New artist</h1>
+{% endif %}
+<form method="post" action="{% if let Some(id) = artist_id %}/artists/{{ id }}{% else %}/artists{% endif %}">
+  {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+  <label for="name">Name</label>
+  <input id="name" name="name" type="text" value="{{ name }}" maxlength="255" required autofocus>
+  <p class="actions">
+    <button type="submit">Save</button>
+    <a href="/artists">Cancel</a>
+  </p>
+</form>
+{% endblock %}

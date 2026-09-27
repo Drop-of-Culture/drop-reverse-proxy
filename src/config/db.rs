@@ -4,6 +4,8 @@ use sqlx::{
 };
 use std::time::Duration;
 
+pub const DEFAULT_SCHEMA: &str = "public";
+
 /// Database configuration
 pub struct DatabaseConfig {
     pub host: String,
@@ -11,6 +13,8 @@ pub struct DatabaseConfig {
     pub database: String,
     pub username: String,
     pub password: String,
+    /// Schema holding the tables, also where migrations are applied.
+    pub schema: String,
     pub max_connections: u32,
     pub min_connections: u32,
     pub connect_timeout: Duration,
@@ -26,6 +30,7 @@ impl Default for DatabaseConfig {
             database: "drop_of_culture".to_string(),
             username: "doc".to_string(),
             password: "doc".to_string(),
+            schema: DEFAULT_SCHEMA.to_string(),
             max_connections: 10,
             min_connections: 1,
             connect_timeout: Duration::from_secs(10),
@@ -44,6 +49,9 @@ pub async fn create_pool(config: &DatabaseConfig) -> Result<PgPool, sqlx::Error>
         .database(&config.database)
         .username(&config.username)
         .password(&config.password)
+        // Pin the schema: by default Postgres resolves unqualified names with
+        // `"$user", public`, so which schema is used would depend on which exist.
+        .options([("search_path", config.schema.as_str())])
         // Enable statement caching for better performance
         .statement_cache_capacity(256);
 
@@ -72,6 +80,8 @@ pub async fn create_pool(config: &DatabaseConfig) -> Result<PgPool, sqlx::Error>
         .connect_with(connect_options)
         .await?;
 
+    ensure_schema_exists(&pool, &config.schema).await?;
+
     tracing::info!(
         max_connections = config.max_connections,
         min_connections = config.min_connections,
@@ -79,6 +89,24 @@ pub async fn create_pool(config: &DatabaseConfig) -> Result<PgPool, sqlx::Error>
     );
 
     Ok(pool)
+}
+
+/// Creates the schema when missing (fresh database), so migrations have somewhere to go.
+async fn ensure_schema_exists(pool: &PgPool, schema: &str) -> Result<(), sqlx::Error> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+    )
+        .bind(schema)
+        .fetch_one(pool)
+        .await?;
+    if !exists {
+        let quoted = format!("\"{}\"", schema.replace('"', "\"\""));
+        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {quoted}"))
+            .execute(pool)
+            .await?;
+        tracing::info!(schema, "Database schema created");
+    }
+    Ok(())
 }
 
 /// Run pending migrations from the `migrations/` directory, creating any

@@ -24,6 +24,7 @@ async fn main() {
         database: db_conf.db_name().to_string(),
         username: db_conf.db_user().to_string(),
         password: db_conf.db_password().to_string(),
+        schema: db_conf.db_schema().to_string(),
         max_connections: 10,
         min_connections: 1,
         connect_timeout: Duration::from_secs(5),

@@ -1,0 +1,14 @@
+# Local oauth2-proxy in front of the admin app (cargo run --bin admin).
+# Copy .env.example to .env and fill it first, then open http://localhost:4180
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    container_name: oauth2-proxy
+    restart: unless-stopped
+    # host network so the proxy can reach the admin app on 127.0.0.1:8081
+    # while both stay bound to loopback only
+    network_mode: host
+    command: --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+    env_file: .env
+    volumes:
+      - ./oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
