@@ -1,9 +1,10 @@
 use crate::config::db::{DatabaseConfig, create_pool};
-use crate::repository::{Entity, Repo, RepositoryError};
+use crate::repository::{Entity, Repo, RepoByToken, RepositoryError};
 use async_trait::async_trait;
 use derive_new::new;
 use sqlx::{Execute, Pool, Postgres};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, new)]
 pub struct Drop {
@@ -107,6 +108,30 @@ RETURNING id
 }
 
 #[async_trait]
+impl RepoByToken<Drop> for DropRepo {
+    async fn get_by_token(&self, token_id: &Uuid) -> Result<Drop, RepositoryError> {
+        let req = sqlx::query_as::<_, Drop>("
+SELECT d.id, d.artwork_id, d.name, d.dir, d.type_id
+FROM \"token\" t
+JOIN \"tag\" tg ON tg.id = t.tag_id
+JOIN \"drop\" d ON d.id = tg.drop_id
+WHERE t.id = $1
+LIMIT 1
+")
+            .bind(token_id);
+            tracing::debug!(sql = req.sql(), %token_id, "get drop by token");
+            req.fetch_one(&self.pool)
+            .await
+            .map_err(|e| {
+                match e {
+                    sqlx::Error::RowNotFound => RepositoryError::EntityNotFound,
+                    _ => RepositoryError::DatabaseError(e),
+                }
+            })
+    }
+}
+
+#[async_trait]
 impl Repo<Drop> for Arc<DropRepo> {
     async fn get(&self, id: i32) -> Result<Drop, RepositoryError> {
         self.as_ref().get(id).await
@@ -114,5 +139,12 @@ impl Repo<Drop> for Arc<DropRepo> {
 
     async fn save_or_update(&self, entity: &Drop) -> Result<i32, RepositoryError> {
         self.as_ref().save_or_update(entity).await
+    }
+}
+
+#[async_trait]
+impl RepoByToken<Drop> for Arc<DropRepo> {
+    async fn get_by_token(&self, token_id: &Uuid) -> Result<Drop, RepositoryError> {
+        self.as_ref().get_by_token(token_id).await
     }
 }

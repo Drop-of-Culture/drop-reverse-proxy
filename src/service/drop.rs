@@ -1,13 +1,14 @@
 use crate::repository::artist::Artist;
 pub(crate) use crate::repository::drop::Drop;
 use crate::repository::redirect::Redirect;
-use crate::repository::{Repo, RepoByDropId, RepoByName};
+use crate::repository::{Repo, RepoByDropId, RepoByName, RepoByToken};
 pub use crate::service::DropServiceT;
 use crate::repository::artwork::Artwork;
 use async_trait::async_trait;
 use derive_new::new;
 use serde::Deserialize;
 use std::fs;
+use uuid::Uuid;
 
 pub const ARTWORK_DIR_PREFIX: &str = "artwork_";
 pub const TRACK_FILE_PREFIX: &str = "track_";
@@ -80,7 +81,7 @@ impl DropRequest {
 #[derive(Debug, Deserialize,)]
 pub struct DropService<T, U, V, W>
 where
-    T: Repo<Drop> + Send + Sync,
+    T: RepoByToken<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
     W: RepoByDropId<Redirect> + Send + Sync {
@@ -92,7 +93,7 @@ where
 
 impl<T, U, V, W> Clone for DropService<T, U, V, W>
 where
-    T: Repo<Drop> + Send + Sync + Clone,
+    T: RepoByToken<Drop> + Send + Sync + Clone,
     U: RepoByName<Artist> + Send + Sync + Clone,
     V: Repo<Artwork> + Send + Sync + Clone,
     W: RepoByDropId<Redirect> + Send + Sync + Clone,
@@ -109,7 +110,7 @@ where
 
 impl<T, U, V, W> DropService<T, U, V, W>
 where
-    T: Repo<Drop> + Send + Sync,
+    T: RepoByToken<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
     W: RepoByDropId<Redirect> + Send + Sync,
@@ -167,7 +168,7 @@ where
 #[async_trait]
 impl<T, U, V, W> DropServiceT for DropService<T, U, V, W>
 where
-    T: Repo<Drop> + Send + Sync,
+    T: RepoByToken<Drop> + Send + Sync,
     U: RepoByName<Artist> + Send + Sync,
     V: Repo<Artwork> + Send + Sync,
     W: RepoByDropId<Redirect> + Send + Sync,
@@ -247,6 +248,19 @@ where
             },
             Err(error) => {
                 tracing::warn!(id, ?error, "drop not found in repo");
+                None
+            }
+        }
+    }
+
+    async fn find_drop_from_token(&self, token_id: &Uuid) -> Option<Drop> {
+        match self.drop_repository.get_by_token(token_id).await {
+            Ok(drop) => {
+                tracing::debug!(%token_id, drop_id = drop.id(), "drop found in repo from token");
+                Some(drop)
+            },
+            Err(error) => {
+                tracing::warn!(%token_id, ?error, "drop not found in repo from token");
                 None
             }
         }

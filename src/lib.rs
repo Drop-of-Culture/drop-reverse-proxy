@@ -1,7 +1,7 @@
 use crate::repository::artist::Artist;
 use crate::repository::artwork::Artwork;
 use crate::repository::token::Token;
-use crate::repository::{Repo, RepoByDropId, RepoByName, RepositoryError};
+use crate::repository::{Repo, RepoByDropId, RepoByName, RepoByToken, RepositoryError};
 use crate::service::DropServiceT;
 use crate::service::drop::DropService;
 use axum::extract::{ConnectInfo, Path, Request, State};
@@ -438,10 +438,7 @@ async fn play(
     if let Some(header_token) = headers.get(TOKEN_NAME) {
         if let Ok(token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                let token_opt = state.token_repo.get(token_uuid_requested).await;
-                if let Ok(token) = token_opt
-                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
-                    && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
+                if let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
                     uri_new.push_str(drop.dir());
@@ -473,9 +470,7 @@ async fn track(
     if let Some(header_token) = headers.get(TOKEN_NAME)
         && let Ok(token_str) = header_token.to_str()
         && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
-        && let Ok(token) = state.token_repo.get(token_uuid_requested).await
-        && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
-        && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
+        && let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
 
         let uri_new = format!("{}/tag/{}/playlist_{}.m3u8", &state.conf.redirect_uri, drop.dir(), track_number);
         tracing::debug!(uri = uri_new, "calling upstream");
@@ -511,10 +506,7 @@ async fn file(
     if let Some(header_token) = headers.get(TOKEN_NAME) {
         if let Ok(token_str) = header_token.to_str() {
             if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                let token_opt = state.token_repo.get(token_uuid_requested).await;
-                if let Ok(token) = token_opt
-                    && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
-                    && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
+                if let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
                     let mut uri_new = String::from(state.conf.redirect_uri);
                     uri_new.push_str("/tag/");
                     uri_new.push_str(drop.dir());
@@ -550,9 +542,7 @@ async fn playlist(
     if let Some(header_token) = headers.get(TOKEN_NAME)
         && let Ok(token_str) = header_token.to_str()
         && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
-        && let Ok(token) = state.token_repo.get(token_uuid_requested).await
-        && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
-        && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
+        && let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
 
         let mut uri_new = String::from(&state.conf.redirect_uri);
         uri_new.push_str("/tag/");
@@ -623,7 +613,7 @@ pub fn create_drop_request_from_toml_file(path: &str) -> figment::Result<DropReq
 #[derive(new)]
 pub struct ServiceConf {
     drop_service: DropService<
-        Arc<dyn Repo<repository::drop::Drop>>,
+        Arc<dyn RepoByToken<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
         Arc<dyn Repo<Artwork>>,
         Arc<dyn RepoByDropId<repository::redirect::Redirect>>,
@@ -642,7 +632,7 @@ impl ServiceConf {
     pub fn drop_service(
         &self,
     ) -> &DropService<
-        Arc<dyn Repo<repository::drop::Drop>>,
+        Arc<dyn RepoByToken<repository::drop::Drop>>,
         Arc<dyn RepoByName<Artist>>,
         Arc<dyn Repo<Artwork>>,
         Arc<dyn RepoByDropId<repository::redirect::Redirect>>> {

@@ -1,21 +1,31 @@
 use async_trait::async_trait;
 use drop_reverse_proxy::repository::drop::Drop;
-use drop_reverse_proxy::repository::Repo;
+use drop_reverse_proxy::repository::{Repo, RepoByToken};
 use drop_reverse_proxy::repository::RepositoryError;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct DropRepoMock {
-    map: Arc<RwLock<HashMap<i32, Drop>>>
+    map: Arc<RwLock<HashMap<i32, Drop>>>,
+    /// token id -> drop id
+    map_by_token: Arc<RwLock<HashMap<Uuid, i32>>>,
 }
 impl DropRepoMock {
     pub fn new() -> Self {
-        Self { map: Arc::new(RwLock::new(HashMap::new())) }
+        Self {
+            map: Arc::new(RwLock::new(HashMap::new())),
+            map_by_token: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     pub fn map(&self) -> &Arc<RwLock<HashMap<i32, Drop>>> {
         &self.map
+    }
+
+    pub fn map_by_token(&self) -> &Arc<RwLock<HashMap<Uuid, i32>>> {
+        &self.map_by_token
     }
 }
 
@@ -31,6 +41,14 @@ impl Repo<Drop> for DropRepoMock {
     async fn save_or_update(&self, entity: &Drop) -> Result<i32, RepositoryError> {
         self.map.write().unwrap().insert(entity.id(), entity.clone());
         Ok(entity.id())
+    }
+}
+
+#[async_trait]
+impl RepoByToken<Drop> for DropRepoMock {
+    async fn get_by_token(&self, token_id: &Uuid) -> Result<Drop, RepositoryError> {
+        let drop_id = *self.map_by_token.read().unwrap().get(token_id).ok_or(RepositoryError::EntityNotFound)?;
+        self.get(drop_id).await
     }
 }
 

@@ -2,6 +2,7 @@ use crate::repository::artist::Artist;
 use crate::repository::{Repo, RepoByName, redirect};
 use crate::service::drop::{DropRequest, ImportError};
 use async_trait::async_trait;
+use uuid::Uuid;
 
 pub mod drop;
 
@@ -18,5 +19,7 @@ pub trait DropServiceT {
     ) -> Result<(), ImportError>;
 
     async fn find_drop(&self, id: i32) -> Option<drop::Drop>;
+    /// Finds the drop linked to a token (token -> tag -> drop) with a single database request.
+    async fn find_drop_from_token(&self, token_id: &Uuid) -> Option<drop::Drop>;
     async fn find_redirect_from_drop_id(&self, drop_id: i32) -> Option<redirect::Redirect>;
 }

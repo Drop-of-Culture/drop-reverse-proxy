@@ -5,7 +5,7 @@ use drop_reverse_proxy::repository::drop::DropRepo;
 use drop_reverse_proxy::repository::tag::TagRepo;
 use drop_reverse_proxy::repository::ip::IpRepo;
 use drop_reverse_proxy::repository::token::TokenRepo;
-use drop_reverse_proxy::repository::{Repo, RepoByDropId, RepoByName};
+use drop_reverse_proxy::repository::{Repo, RepoByDropId, RepoByName, RepoByToken};
 use drop_reverse_proxy::service::drop::DropService;
 use drop_reverse_proxy::{AppState, ServiceConf, app, create_conf_from_toml_file};
 use std::net::SocketAddr;
@@ -62,7 +62,7 @@ async fn main() {
         tracing::info!("Database connection successful");
 
         let drop_service = DropService::new(
-            Arc::new(drop_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::drop::Drop>>,
+            Arc::new(drop_repository) as Arc<dyn RepoByToken<drop_reverse_proxy::repository::drop::Drop>>,
             Arc::new(artist_repository) as Arc<dyn RepoByName<drop_reverse_proxy::repository::artist::Artist>>,
             Arc::new(artwork_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::artwork::Artwork>>,
             Arc::new(redirect_repo) as Arc<dyn RepoByDropId<drop_reverse_proxy::repository::redirect::Redirect>>,
