@@ -79,7 +79,7 @@ WHERE id = $1
 LIMIT 1
 ")
             .bind(id);
-            println!("get(): {} - {}", req.sql(), id);
+            tracing::debug!(sql = req.sql(), id, "get drop");
             req.fetch_one(&self.pool)
             .await
             .map_err(|e| {

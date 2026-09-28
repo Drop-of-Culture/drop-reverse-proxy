@@ -90,7 +90,7 @@ LIMIT 1
             .fetch_one(&self.pool)
             .await
             .map_err(|err| {
-                println!("Error fetching ip: {:?}", err);
+                tracing::debug!(%ip_addr, error = ?err, "ip not fetched");
                 RepositoryError::EntityNotFound
             })?
             .try_into()

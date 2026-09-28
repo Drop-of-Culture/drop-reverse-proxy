@@ -84,7 +84,7 @@ RETURNING id
             .fetch_one(&self.pool)
             .await
             .map_err(|e| {
-                println!("insert error: {:?}", e);
+                tracing::error!(error = ?e, "artwork insert failed");
                 RepositoryError::EntityNotSaved
             })
     }

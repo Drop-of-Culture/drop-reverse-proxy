@@ -54,7 +54,6 @@ impl IntoResponse for AdminError {
             AdminError::Validation(message) => (StatusCode::UNPROCESSABLE_ENTITY, message.as_str()),
             AdminError::Internal(detail) => {
                 tracing::error!(detail, "admin internal error");
-                println!("admin internal error: {detail}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal error.")
             }
         };

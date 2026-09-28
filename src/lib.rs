@@ -26,6 +26,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tar::Archive;
 use toml::de::Error;
+use tower_http::classify::{ServerErrorsAsFailures, SharedClassifier};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use uuid::Uuid;
 
 pub const TOKEN_NAME: &str = "dop_token";
@@ -35,6 +38,24 @@ pub mod repository;
 pub mod service;
 pub mod config;
 pub mod admin;
+
+/// Prints `tracing` events to stdout. The level is set with `RUST_LOG`
+/// (e.g. `RUST_LOG=debug`), defaults to info for the app and warn for sqlx.
+pub fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,sqlx=warn".into()),
+        )
+        .init();
+}
+
+/// Logs every HTTP request (method, uri, status, latency) at info level.
+pub fn http_trace_layer() -> TraceLayer<SharedClassifier<ServerErrorsAsFailures>> {
+    TraceLayer::new_for_http()
+        .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+        .on_response(DefaultOnResponse::new().level(Level::INFO))
+}
 
 pub fn app(state: AppState) -> Router {
     Router::new()
@@ -71,6 +92,7 @@ pub fn app(state: AppState) -> Router {
             get(|| async { Ok::<_, StatusCode>(StatusCode::UNAUTHORIZED) })
         )
         // check route ""
+        .layer(http_trace_layer())
         .with_state(state)
 }
 
@@ -118,13 +140,13 @@ async fn tag(
     Path(tag): Path<String>,
 ) -> Result<Response, AppError> {
     if let Some(tag_extracted) = extract_tag_from_path(tag.as_str()) {
-        println!("tag(): tag extracted");
+        tracing::debug!(tag = tag_extracted, "tag extracted");
         let uuid = Uuid::new_v4();
 
         let tag = state.tag_repo.get_by_name(&tag_extracted).await.map_err(|_| AppError::TagNotFound)?;
-        println!("tag(): tag found in repo");
+        tracing::debug!("tag found in repo");
         let drop = state.service_conf.drop_service.find_drop(tag.drop_id()).await.ok_or(AppError::DropNotFound)?;
-        println!("tag(): drop found in repo");
+        tracing::debug!(drop_id = drop.id(), "drop found in repo");
         
         if drop.type_id() == 2 {
             let redirect = state.service_conf.drop_service.find_redirect_from_drop_id(drop.id()).await.ok_or(AppError::RedirectNotFound)?;
@@ -132,13 +154,13 @@ async fn tag(
         }
         
         state.token_repo.save_or_update(&Token::new(uuid, tag.id())).await.map_err(|_| AppError::TokenSaveError)?;
-        println!("token saved");
+        tracing::debug!(%uuid, "token saved");
 
         let mut uri_new = state.conf.redirect_uri;
         uri_new.push_str("/tag/");
         uri_new.push_str(drop.dir());
         uri_new.push_str("/index.html");
-        println!("calling url {uri_new}");
+        tracing::debug!(uri = uri_new, "calling upstream");
         return match reqwest::get(uri_new).await {
             Ok(resp) => {
                 let mut response = resp.bytes().await.unwrap().into_response().into_body().into_response();
@@ -172,18 +194,18 @@ async fn drop_import(
     // check dir
     let import_path = state.conf.import_path;
     if import_path.is_empty() {
-        println!("import_path not set, can't import");
+        tracing::warn!("import_path not set, can't import");
         return Ok(StatusCode::FAILED_DEPENDENCY.into_response());
     }
     let path = std::path::Path::new(&import_path);
     if !path.is_dir() {
-        println!("import_path is not a directory, can't import");
+        tracing::warn!(import_path, "import_path is not a directory, can't import");
         return Ok(StatusCode::FAILED_DEPENDENCY.into_response());
     }
     // look for files
     let files_to_import = look_for_drop_files_at_path(&path);
     if files_to_import.is_empty() {
-        println!("no files to import at import path");
+        tracing::info!(import_path, "no files to import at import path");
         let _response = Response::builder()
             .status(StatusCode::OK)
             .body("{imported: 0}");
@@ -207,7 +229,7 @@ async fn drop_import(
 
 pub fn check_drop_file(file: &str) -> Result<(String, DropRequest), ImportError> {
     if !file.ends_with(".tar.gz") {
-        println!("file is not a tar.gz file");
+        tracing::warn!(file, "file is not a tar.gz file");
         return Err(ImportError::InvalidFileExtension)
     }
     // create temporary dir
@@ -319,7 +341,6 @@ async fn tag_guard(
     req: Request,
     next: Next
 ) -> Response {
-    println!("connect info ip {:#?}", connect_info.ip());
     // check if IP is banned
     if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts).await {
         increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
@@ -330,14 +351,14 @@ async fn tag_guard(
     if let Some(tag) = extract_tag_from_path(path) {
         if check_tag(tag.as_str(), state.tag_repo).await.is_ok() {
                 let _ = state.ip_repo.save_or_update(&connect_info.ip(), 0).await;
-                println!("tag_guard(): tag found in repo");
+                tracing::debug!(tag, "tag found in repo");
                 return next.run(req).await.into_response();
         } else {
-            println!("tag_guard(): tag not found in repo");
+            tracing::warn!(tag, ip = %connect_info.ip(), "tag not found in repo");
             increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await
         }
     }
-    println!("tag_guard(): tag not found in path");
+    tracing::warn!(path = req.uri().path(), ip = %connect_info.ip(), "tag not found in path");
     AppError::TagNotFound.into_response()
 }
 
@@ -390,7 +411,7 @@ async fn check_tag(tag: &str, tag_repo: Arc<repository::tag::TagRepo>) -> Result
 async fn check_ip(ip_addr: IpAddr, ip_repo: &Arc<repository::ip::IpRepo>, max_bad_attempts: u8) -> bool {
     match ip_repo.get(&ip_addr).await {
         Ok(ip) => {
-            println!("{:#?}", ip);
+            tracing::debug!(?ip, "ip found");
             *ip.nb_bad_attempts() < max_bad_attempts as u32
         },
         Err(_) => true,
@@ -398,14 +419,12 @@ async fn check_ip(ip_addr: IpAddr, ip_repo: &Arc<repository::ip::IpRepo>, max_ba
 }
 
 fn extract_tag_from_path(uri_path: &str) -> Option<String> {
-    println!("match in {uri_path} ? ");
     let re = Regex::new(r"([^/]+)/?$").unwrap();
     if let Some(caps) = re.captures(uri_path) {
         let str = caps.get(1).unwrap().as_str().to_string();
-        println!("match");
         Some(str)
     } else {
-        println!("no match!");
+        tracing::debug!(uri_path, "no tag in path");
         None
     }
 }
@@ -427,7 +446,7 @@ async fn play(
                     uri_new.push_str("/tag/");
                     uri_new.push_str(drop.dir());
                     uri_new.push_str("/playlist.m3u8");
-                    println!("calling {uri_new}");
+                    tracing::debug!(uri = uri_new, "calling upstream");
                     return match reqwest::get(uri_new).await {
                         Ok(resp) => {
                             Ok(resp.bytes().await.unwrap().into_response())
@@ -450,7 +469,6 @@ async fn track(
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Result<Response, AppError> {
-    println!("called : {}", req.uri().path());
     let headers = req.headers().clone();
     if let Some(header_token) = headers.get(TOKEN_NAME)
         && let Ok(token_str) = header_token.to_str()
@@ -460,7 +478,7 @@ async fn track(
         && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
 
         let uri_new = format!("{}/tag/{}/playlist_{}.m3u8", &state.conf.redirect_uri, drop.dir(), track_number);
-        println!("calling {uri_new}");
+        tracing::debug!(uri = uri_new, "calling upstream");
         return match reqwest::get(uri_new).await {
             Ok(resp) => {
                 Ok(resp.bytes().await.unwrap().into_response())
@@ -503,11 +521,11 @@ async fn file(
                     uri_new.push('/');
                     uri_new.push_str(path.as_str());
 
-                    println!("calling {uri_new}");
+                    tracing::debug!(uri = uri_new, "calling upstream");
                     return match reqwest::get(uri_new).await {
                         Ok(resp) => {
                             resp.headers().iter().for_each(|(header_name, header_value)| {
-                                println!("header: {:#?} - {:#?}", header_name, header_value);
+                                tracing::trace!(?header_name, ?header_value, "upstream header");
                             });
                             Ok(resp.bytes().await.unwrap().into_response().into_body().into_response())
                         },
@@ -540,7 +558,7 @@ async fn playlist(
         uri_new.push_str("/tag/");
         uri_new.push_str(drop.dir());
         uri_new.push_str("/playlist.toml");
-        println!("checking if there is playlist info at uri: {uri_new}");
+        tracing::debug!(uri = uri_new, "checking playlist info");
         return if let Ok(resp) = reqwest::get(uri_new).await
             && let Ok(text) = resp.text().await
             && !text.is_empty()

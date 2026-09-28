@@ -15,6 +15,8 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
+    drop_reverse_proxy::init_tracing();
+
     let conf = create_conf_from_toml_file("app.toml")
         .expect("can't load conf from toml file");
     let admin_conf = create_admin_conf_from_toml_file("app.toml")
@@ -63,7 +65,7 @@ async fn serve(pool: PgPool, bind_addr: &str, allowed_origin: &str, max_attempts
 
     let state = AdminState { pool, allowed_origin: Arc::from(allowed_origin), max_attempts };
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    println!("Admin listening on {addr}");
+    tracing::info!(%addr, "Admin listening");
     axum::serve(listener, admin_app(state)).await.unwrap();
 }
 

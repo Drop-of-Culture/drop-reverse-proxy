@@ -15,6 +15,8 @@ use drop_reverse_proxy::repository::redirect::RedirectRepo;
 
 #[tokio::main]
 async fn main() {
+    drop_reverse_proxy::init_tracing();
+
     let conf = create_conf_from_toml_file("app.toml")
         .expect("can't load conf from toml file");
     let db_conf = conf.db_conf().expect("db_conf not found in app.toml");
@@ -57,7 +59,7 @@ async fn main() {
         && let Ok(token_repo) = TokenRepo::from_pool(db_pool.clone())
         && let Ok(ip_repo) = IpRepo::from_pool(db_pool.clone())
         && let Ok(redirect_repo) = RedirectRepo::new(&db_config).await {
-        println!("Database connection successful");
+        tracing::info!("Database connection successful");
 
         let drop_service = DropService::new(
             Arc::new(drop_repository) as Arc<dyn Repo<drop_reverse_proxy::repository::drop::Drop>>,

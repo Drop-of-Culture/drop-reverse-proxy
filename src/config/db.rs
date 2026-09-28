@@ -115,6 +115,5 @@ async fn ensure_schema_exists(pool: &PgPool, schema: &str) -> Result<(), sqlx::E
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!("./migrations").run(pool).await?;
     tracing::info!("Database migrations up to date");
-    println!("Database migrations up to date");
     Ok(())
 }

@@ -67,7 +67,7 @@ LIMIT 1
             .fetch_one(&self.pool)
             .await
             .map_err(|err| {
-                println!("Error fetching token: {:?}", err);
+                tracing::warn!(error = ?err, "error fetching token");
                 RepositoryError::EntityNotFound
             })
     }

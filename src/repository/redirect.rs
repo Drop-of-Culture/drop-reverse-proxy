@@ -89,7 +89,7 @@ WHERE drop_id = $1
 LIMIT 1
 ")
             .bind(drop_id);
-        println!("get_by_drop_id(): {} - {}", req.sql(), drop_id);
+        tracing::debug!(sql = req.sql(), drop_id, "get redirect by drop id");
 
             req.fetch_one(&self.pool)
             .await

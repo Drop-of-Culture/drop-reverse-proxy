@@ -87,6 +87,7 @@ pub fn admin_app(state: AdminState) -> Router {
         // layers run bottom-up: identify the admin first, then check the origin
         .layer(from_fn_with_state(state.clone(), auth::check_origin))
         .layer(from_fn_with_state(state.clone(), auth::require_admin))
+        .layer(crate::http_trace_layer())
         .with_state(state)
 }
 

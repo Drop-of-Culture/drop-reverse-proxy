@@ -242,11 +242,11 @@ where
     async fn find_drop(&self, id: i32) -> Option<Drop> {
         match self.drop_repository.get(id).await {
             Ok(drop) => {
-                println!("drop found in repo");
+                tracing::debug!(id, "drop found in repo");
                 Some(drop)
             },
             Err(error) => {
-                println!("{:?}", error);
+                tracing::warn!(id, ?error, "drop not found in repo");
                 None
             }
         }
@@ -255,12 +255,11 @@ where
     async fn find_redirect_from_drop_id(&self, drop_id: i32) -> Option<Redirect> {
         match self.redirect_repository.get_by_drop_id(drop_id).await {
             Ok(redirect) => {
-                println!("redirect found in repo");
+                tracing::debug!(drop_id, "redirect found in repo");
                 Some(redirect)
             },
             Err(error) => {
-                println!("redirect not found in repo");
-                println!("{:?}", error);
+                tracing::warn!(drop_id, ?error, "redirect not found in repo");
                 None
             }
         }
