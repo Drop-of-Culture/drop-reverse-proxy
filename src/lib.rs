@@ -459,7 +459,7 @@ async fn track(
         && let Ok(tag) = state.tag_repo.get(token.tag_id()).await
         && let Some(drop) = state.service_conf.drop_service.find_drop(tag.drop_id()).await {
 
-        let uri_new = format!("{}/tag/{}/{}_{}.m3u8", &state.conf.redirect_uri, drop.dir(), tag.name(), track_number);
+        let uri_new = format!("{}/tag/{}/playlist_{}.m3u8", &state.conf.redirect_uri, drop.dir(), track_number);
         println!("calling {uri_new}");
         return match reqwest::get(uri_new).await {
             Ok(resp) => {
