@@ -1,5 +1,6 @@
 use crate::repository::artist::Artist;
 use crate::repository::artwork::Artwork;
+use crate::repository::drop::Drop;
 use crate::repository::token::Token;
 use crate::repository::{Repo, RepoByDropId, RepoByName, RepoByToken, RepositoryError};
 use crate::service::DropServiceT;
@@ -10,7 +11,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use derive_new::new;
 use figment::Figment;
 use figment::providers::{Format, Toml};
@@ -379,26 +380,24 @@ async fn increment_ip_nb_bad_attempts(ip_addr: &IpAddr, ip_repo: &Arc<repository
     }
 }
 
-// Placeholder for future token checks
+// Route guard checking the token, the drop it gives access to is passed to the handler
+// as a request extension (`Extension<Drop>`)
 async fn token_guard(
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
-    req: Request,
+    mut req: Request,
     next: Next
 ) -> Response {
     if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts).await {
         increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
         return AppError::Unauthorized.into_response();
     }
-    let headers = req.headers().clone();
-    if let Some(header_token) = headers.get(TOKEN_NAME) {
-        if let Ok(header_token_str) = header_token.to_str() {
-            if let Ok(token_uuid_requested) = Uuid::parse_str(header_token_str) {
-                if let Ok(_token) = state.token_repo.get(token_uuid_requested).await {
-                    return next.run(req).await;
-                }
-            }
-        }
+    if let Some(header_token) = req.headers().get(TOKEN_NAME)
+        && let Ok(header_token_str) = header_token.to_str()
+        && let Ok(token_uuid_requested) = Uuid::parse_str(header_token_str)
+        && let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
+        req.extensions_mut().insert(drop);
+        return next.run(req).await;
     }
     increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
     AppError::Unauthorized.into_response()
@@ -432,134 +431,87 @@ fn extract_tag_from_path(uri_path: &str) -> Option<String> {
 async fn play(
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
-    req: Request,
+    Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
-    let headers = req.headers().clone();
-    if let Some(header_token) = headers.get(TOKEN_NAME) {
-        if let Ok(token_str) = header_token.to_str() {
-            if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                if let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
-                    let mut uri_new = String::from(state.conf.redirect_uri);
-                    uri_new.push_str("/tag/");
-                    uri_new.push_str(drop.dir());
-                    uri_new.push_str("/playlist.m3u8");
-                    tracing::debug!(uri = uri_new, "calling upstream");
-                    return match reqwest::get(uri_new).await {
-                        Ok(resp) => {
-                            Ok(resp.bytes().await.unwrap().into_response())
-                        },
-                        Err(_) => {
-                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
-                            Err(AppError::TagNotFound)
-                        },
-                    }
-                }
-            }
-        }
+    let uri_new = format!("{}/tag/{}/playlist.m3u8", &state.conf.redirect_uri, drop.dir());
+    tracing::debug!(uri = uri_new, "calling upstream");
+    match reqwest::get(uri_new).await {
+        Ok(resp) => {
+            Ok(resp.bytes().await.unwrap().into_response())
+        },
+        Err(_) => {
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+            Err(AppError::TagNotFound)
+        },
     }
-    Ok(StatusCode::UNAUTHORIZED.into_response())
 }
 
 async fn track(
     Path(track_number): Path<u8>,
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
-    req: Request,
+    Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
-    let headers = req.headers().clone();
-    if let Some(header_token) = headers.get(TOKEN_NAME)
-        && let Ok(token_str) = header_token.to_str()
-        && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
-        && let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
-
-        let uri_new = format!("{}/tag/{}/playlist_{}.m3u8", &state.conf.redirect_uri, drop.dir(), track_number);
-        tracing::debug!(uri = uri_new, "calling upstream");
-        return match reqwest::get(uri_new).await {
-            Ok(resp) => {
-                Ok(resp.bytes().await.unwrap().into_response())
-            },
-            Err(_) => {
-                increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
-                Err(AppError::TagNotFound)
-            },
-        }
+    let uri_new = format!("{}/tag/{}/playlist_{}.m3u8", &state.conf.redirect_uri, drop.dir(), track_number);
+    tracing::debug!(uri = uri_new, "calling upstream");
+    match reqwest::get(uri_new).await {
+        Ok(resp) => {
+            Ok(resp.bytes().await.unwrap().into_response())
+        },
+        Err(_) => {
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+            Err(AppError::TagNotFound)
+        },
     }
-    Ok(StatusCode::UNAUTHORIZED.into_response())
 }
 
 async fn track_part(
     Path(track_part): Path<String>,
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
-    req: Request,
+    Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
-    file(State(state), ConnectInfo(connect_info), Path(track_part), req).await
+    file(State(state), ConnectInfo(connect_info), Path(track_part), Extension(drop)).await
 }
 
 async fn file(
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
     Path(path): Path<String>,
-    req: Request,
+    Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
-    let headers = req.headers().clone();
-    if let Some(header_token) = headers.get(TOKEN_NAME) {
-        if let Ok(token_str) = header_token.to_str() {
-            if let Ok(token_uuid_requested) = Uuid::parse_str(token_str) {
-                if let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
-                    let mut uri_new = String::from(state.conf.redirect_uri);
-                    uri_new.push_str("/tag/");
-                    uri_new.push_str(drop.dir());
-                    uri_new.push('/');
-                    uri_new.push_str(path.as_str());
-
-                    tracing::debug!(uri = uri_new, "calling upstream");
-                    return match reqwest::get(uri_new).await {
-                        Ok(resp) => {
-                            resp.headers().iter().for_each(|(header_name, header_value)| {
-                                tracing::trace!(?header_name, ?header_value, "upstream header");
-                            });
-                            Ok(resp.bytes().await.unwrap().into_response().into_body().into_response())
-                        },
-                        Err(_) => {
-                            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
-                            Err(AppError::TagNotFound)
-                        },
-                    }
-                }
-            }
-        }
+    let uri_new = format!("{}/tag/{}/{}", &state.conf.redirect_uri, drop.dir(), path);
+    tracing::debug!(uri = uri_new, "calling upstream");
+    match reqwest::get(uri_new).await {
+        Ok(resp) => {
+            resp.headers().iter().for_each(|(header_name, header_value)| {
+                tracing::trace!(?header_name, ?header_value, "upstream header");
+            });
+            Ok(resp.bytes().await.unwrap().into_response().into_body().into_response())
+        },
+        Err(_) => {
+            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+            Err(AppError::TagNotFound)
+        },
     }
-    Ok(StatusCode::UNAUTHORIZED.into_response())
 }
 
 async fn playlist(
     State(state): State<AppState>,
     ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
-    req: Request,
+    Extension(drop): Extension<Drop>,
 ) -> Response {
-    let headers = req.headers().clone();
-    if let Some(header_token) = headers.get(TOKEN_NAME)
-        && let Ok(token_str) = header_token.to_str()
-        && let Ok(token_uuid_requested) = Uuid::parse_str(token_str)
-        && let Some(drop) = state.service_conf.drop_service.find_drop_from_token(&token_uuid_requested).await {
-
-        let mut uri_new = String::from(&state.conf.redirect_uri);
-        uri_new.push_str("/tag/");
-        uri_new.push_str(drop.dir());
-        uri_new.push_str("/playlist.toml");
-        tracing::debug!(uri = uri_new, "checking playlist info");
-        return if let Ok(resp) = reqwest::get(uri_new).await
-            && let Ok(text) = resp.text().await
-            && !text.is_empty()
-            && let Ok(playlist_data) = PlaylistData::create_from_toml_text(text.as_str()) {
-            Json(playlist_data).into_response()
-        } else {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
-            AppError::PlaylistNotFound.into_response()
-        }
+    let uri_new = format!("{}/tag/{}/playlist.toml", &state.conf.redirect_uri, drop.dir());
+    tracing::debug!(uri = uri_new, "checking playlist info");
+    if let Ok(resp) = reqwest::get(uri_new).await
+        && let Ok(text) = resp.text().await
+        && !text.is_empty()
+        && let Ok(playlist_data) = PlaylistData::create_from_toml_text(text.as_str()) {
+        Json(playlist_data).into_response()
+    } else {
+        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+        AppError::PlaylistNotFound.into_response()
     }
-    AppError::Unauthorized.into_response()
 }
 
 #[derive(Clone, Deserialize, new, Debug)]
