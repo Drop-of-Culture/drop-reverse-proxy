@@ -110,7 +110,7 @@ RETURNING id
 #[async_trait]
 impl RepoByToken<Drop> for DropRepo {
     async fn get_by_token(&self, token_id: &Uuid) -> Result<Drop, RepositoryError> {
-        let req = sqlx::query_as::<_, Drop>("
+        sqlx::query_as::<_, Drop>("
 SELECT d.id, d.artwork_id, d.name, d.dir, d.type_id
 FROM \"token\" t
 JOIN \"tag\" tg ON tg.id = t.tag_id
@@ -118,9 +118,8 @@ JOIN \"drop\" d ON d.id = tg.drop_id
 WHERE t.id = $1
 LIMIT 1
 ")
-            .bind(token_id);
-            tracing::debug!(sql = req.sql(), %token_id, "get drop by token");
-            req.fetch_one(&self.pool)
+            .bind(token_id)
+            .fetch_one(&self.pool)
             .await
             .map_err(|e| {
                 match e {

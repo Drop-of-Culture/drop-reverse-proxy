@@ -82,16 +82,14 @@ RETURNING id
     }
 
     async fn get_by_drop_id(&self, drop_id: i32) -> Result<Redirect, RepositoryError> {
-        let req = sqlx::query_as::<_, Redirect>("
+        sqlx::query_as::<_, Redirect>("
 SELECT id, drop_id, create_date, update_date, name, link
 FROM \"redirect\"
 WHERE drop_id = $1
 LIMIT 1
 ")
-            .bind(drop_id);
-        tracing::debug!(sql = req.sql(), drop_id, "get redirect by drop id");
-
-            req.fetch_one(&self.pool)
+            .bind(drop_id)
+            .fetch_one(&self.pool)
             .await
             .map_err(|_| RepositoryError::EntityNotFound)
     }
