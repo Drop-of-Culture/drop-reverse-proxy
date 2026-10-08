@@ -18,6 +18,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /usr/local/bin/drop-reverse-proxy /usr/local/bin/
 # owned by app so the data volume mounted here is writable (imports untar next to data/import)
-RUN mkdir -p /app/data/import && chown -R app:app /app/data
+# /app/www/tag is web_server_path, shared with apache
+RUN mkdir -p /app/data/import /app/www/tag && chown -R app:app /app/data /app/www
 USER app
 ENTRYPOINT ["drop-reverse-proxy"]

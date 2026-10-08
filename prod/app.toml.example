@@ -1,12 +1,14 @@
 # Copy to prod/app.toml, mounted at /app/app.toml in both proxy and admin containers.
 
-# where the drop files (playlists, segments) are served from
-redirect_uri = 'https://files.example.com'
+# where the proxy fetches the drop files (playlists, segments) from: the apache container
+redirect_uri = 'http://apache'
 # 0.0.0.0 so Traefik can reach the proxy from its container
 bind_addr = '0.0.0.0:8000'
 max_attempts = 10
 tags = []
 import_path = "./data/import"
+# imported drops are written here (the drops volume, served by apache under /tag)
+web_server_path = "/app/www/tag"
 
 [db_conf]
 db_host = "postgres"

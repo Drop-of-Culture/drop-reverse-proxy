@@ -4,11 +4,13 @@
 # Images are built from the repo root:
 #   docker build -f docker/proxy.Dockerfile -t drop-reverse-proxy:latest .
 #   docker build -f docker/admin.Dockerfile -t drop-admin:latest .
+#   docker build -f docker/apache.Dockerfile -t drop-apache:latest .
 #
 # Routing:
 #   https://${DOMAIN}           -> proxy (public, no auth)
 #   https://admin.${DOMAIN}/    -> oauth2-proxy -> admin (127.0.0.1:8081)
 #   https://admin.${DOMAIN}/pgadmin/ -> oauth2-proxy -> pgadmin
+#   apache (drop files) has no route: only the proxy reaches it, on the files network
 
 services:
   # 1. Le Routeur Principal
@@ -155,6 +157,11 @@ services:
       - ./app.toml:/app/app.toml:ro
       # import dir lives in data/: the importer creates untar dirs next to it
       - proxy-data:/app/data
+      # web_server_path: imported drops are written here, apache serves them
+      - drops:/app/www/tag
+    networks:
+      - default
+      - files
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,7 +177,32 @@ services:
         limits:
           memory: 60M
 
+  # 7. Drop files server, fetched by the proxy (redirect_uri = 'http://apache')
+  apache:
+    image: drop-apache:latest
+    container_name: apache
+    restart: unless-stopped
+    volumes:
+      - drops:/usr/local/apache2/htdocs/tag:ro
+    # only on the internal files network: no traefik route, no port, no internet
+    networks:
+      - files
+    depends_on:
+      # the proxy mounts drops first, so the new volume gets its app-owned /app/www/tag
+      proxy-maison:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+networks:
+  # proxy <-> apache only
+  files:
+    internal: true
+
 volumes:
   pgdata:
   pgadmin-data:
   proxy-data:
+  drops:

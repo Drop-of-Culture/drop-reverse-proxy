@@ -52,3 +52,6 @@ services:
       - "traefik.http.routers.proxy-maison.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.proxy-maison.entrypoints=web"
       - "traefik.http.services.proxy-maison.loadbalancer.server.port=8000"
+
+  apache:
+    container_name: prod-test-apache
