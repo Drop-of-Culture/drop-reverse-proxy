@@ -1,7 +1,20 @@
+# Production stack. Secrets and domain come from prod/.env (see .env.example),
+# app config from prod/app.toml (see app.toml.example).
+#
+# Images are built from the repo root:
+#   docker build -f docker/proxy.Dockerfile -t drop-reverse-proxy:latest .
+#   docker build -f docker/admin.Dockerfile -t drop-admin:latest .
+#
+# Routing:
+#   https://${DOMAIN}           -> proxy (public, no auth)
+#   https://admin.${DOMAIN}/    -> oauth2-proxy -> admin (127.0.0.1:8081)
+#   https://admin.${DOMAIN}/pgadmin/ -> oauth2-proxy -> pgadmin
+
 services:
   # 1. Le Routeur Principal
   traefik:
-    image: traefik:v3.0
+    # >= v3.6: older versions use a Docker API version recent engines reject
+    image: traefik:v3.6
     container_name: traefik
     restart: unless-stopped
     ports:
@@ -9,43 +22,58 @@ services:
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./acme.json:/acme.json # Stockage SSL Let's Encrypt
+      - ./acme.json:/acme.json # Stockage SSL Let's Encrypt (chmod 600)
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.websecure.address=:443"
-      # Configuration TLS automatique à décommenter si besoin :
-      # - "--certificatescentral.acme.httpchallenge=true"
-      # - "--certificatescentral.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.le.acme.storage=/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge=true"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
     deploy:
       resources:
         limits:
           memory: 80M # Traefik est ultra-léger en Go
 
   # 2. Le Gardien Authentification
+  # Reverse proxy in front of admin and pgadmin: it checks the GitHub login and
+  # passes it to the admin app in X-Forwarded-User.
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.4.0
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
     container_name: oauth2-proxy
     restart: unless-stopped
     environment:
-      - OAUTH2_PROXY_PROVIDER=github # Exemple : github, google, keycloak, etc.
-      - OAUTH2_PROXY_CLIENT_ID=votre_client_id
-      - OAUTH2_PROXY_CLIENT_SECRET=votre_client_secret
-      - OAUTH2_PROXY_COOKIE_SECRET=un_secret_de_32_octets_minimum_base64
+      - OAUTH2_PROXY_PROVIDER=github
+      - OAUTH2_PROXY_SCOPE=user:email read:org
+      - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_PROXY_CLIENT_ID}
+      - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_PROXY_CLIENT_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET}
+      - OAUTH2_PROXY_GITHUB_ORG=${OAUTH2_PROXY_GITHUB_ORG}
+      - OAUTH2_PROXY_GITHUB_TEAM=${OAUTH2_PROXY_GITHUB_TEAM:-}
+      # the GitHub org/team membership does the filtering
       - OAUTH2_PROXY_EMAIL_DOMAINS=*
-      - OAUTH2_PROXY_UPSTREAMS=static://202 # Réponse vide par défaut si OK
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      - OAUTH2_PROXY_REVERSE_PROXY=true
+      - OAUTH2_PROXY_REDIRECT_URL=https://admin.${DOMAIN}/oauth2/callback
+      # admin shares this container's network, so it's reachable on loopback only
+      - OAUTH2_PROXY_UPSTREAMS=http://127.0.0.1:8081/,http://pgadmin:80/pgadmin/
+      # sends X-Forwarded-User (GitHub login) and X-Forwarded-Email to the admin app
+      - OAUTH2_PROXY_PASS_USER_HEADERS=true
+      - OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true
+      - OAUTH2_PROXY_COOKIE_NAME=_admin_oauth2
+      - OAUTH2_PROXY_COOKIE_SAMESITE=lax
+      - OAUTH2_PROXY_COOKIE_EXPIRE=12h
+      - OAUTH2_PROXY_COOKIE_SECURE=true
     labels:
       - "traefik.enable=true"
-      # Configuration du Middleware de vérification
-      - "traefik.http.middlewares.auth-verify.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth"
-      - "traefik.http.middlewares.auth-verify.forwardauth.trustForwardHeader=true"
-      - "traefik.http.middlewares.auth-verify.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email"
-      # Router public nécessaire pour intercepter les callbacks d'auth (/oauth2/callback)
-      - "traefik.http.routers.oauth.rule=Host(`://votre-domaine.com`) && PathPrefix(`/oauth2`)"
-      - "traefik.http.routers.oauth.entrypoints=websecure"
-      - "traefik.http.routers.oauth.service=oauth2-proxy"
+      - "traefik.http.routers.admin.rule=Host(`admin.${DOMAIN}`)"
+      - "traefik.http.routers.admin.entrypoints=websecure"
+      - "traefik.http.routers.admin.tls.certresolver=le"
+      - "traefik.http.services.admin.loadbalancer.server.port=4180"
     deploy:
       resources:
         limits:
@@ -53,15 +81,17 @@ services:
 
   # 3. Base de données PostgreSQL bridée
   postgres:
-    image: postgres:16-alpine
+    # same major as local-dev, so dumps restore both ways
+    image: postgres:18-alpine
     container_name: postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: admin_user
-      POSTGRES_PASSWORD: super_secret_password
-      POSTGRES_DB: mon_projet
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres 18 images keep data under /var/lib/postgresql/<major>/
+      - pgdata:/var/lib/postgresql
     command:
       # Optimisations RAM critiques pour un VPS de 2 Go
       - -c
@@ -70,56 +100,71 @@ services:
       - work_mem=4MB
       - -c
       - max_connections=20
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dropofculture -d dropofculture"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     deploy:
       resources:
         limits:
           memory: 250M
 
-  # 4. Votre API Admin Rust
+  # 4. Admin (src/bin/admin.rs)
+  # admin.rs refuses to bind anything but loopback since it trusts X-Forwarded-User:
+  # sharing oauth2-proxy's network namespace makes oauth2-proxy its only client.
   api-admin-rust:
-    image: votre-api-rust:latest # Image construite à partir de votre binaire Rust
+    image: drop-admin:latest
     container_name: api-admin-rust
     restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api-admin.rule=Host(`://votre-domaine.com`) && PathPrefix(`/`)"
-      - "traefik.http.routers.api-admin.entrypoints=websecure"
-      # Activation de la protection Oauth2 sur cette route !
-      - "traefik.http.routers.api-admin.middlewares=auth-verify"
+    network_mode: service:oauth2-proxy
+    volumes:
+      - ./app.toml:/app/app.toml:ro
+    depends_on:
+      oauth2-proxy:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     deploy:
       resources:
         limits:
           memory: 60M # Rust n'a besoin de rien, 60M est déjà énorme
 
-  # 5. Interface d'administration Postgres
+  # 5. Interface d'administration Postgres, served under admin.${DOMAIN}/pgadmin/
   pgadmin:
-    image: dpage/pgadmin4
+    image: dpage/pgadmin4:9.11
     container_name: pgadmin
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@votre-domaine.com
-      PGADMIN_DEFAULT_PASSWORD: password_pgadmin
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.pgadmin.rule=Host(`pg://votre-domaine.com`)"
-      - "traefik.http.routers.pgadmin.entrypoints=websecure"
-      # Protection par OAuth2 également
-      - "traefik.http.routers.pgadmin.middlewares=auth-verify"
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      SCRIPT_NAME: /pgadmin
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
     deploy:
       resources:
         limits:
           memory: 300M # Contrainte forte sur pgAdmin (Python) pour éviter qu'il dérive
 
-  # 6. Votre Reverse Proxy Maison en Rust (Optionnel si mis dans Docker)
+  # 6. Reverse proxy public (src/main.rs)
   proxy-maison:
-    image: votre-proxy-maison-rust:latest
+    image: drop-reverse-proxy:latest
     container_name: proxy-maison
     restart: unless-stopped
+    volumes:
+      - ./app.toml:/app/app.toml:ro
+      # import dir lives in data/: the importer creates untar dirs next to it
+      - proxy-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     labels:
       - "traefik.enable=true"
       # Route publique classique sans aucun middleware d'authentification
-      - "traefik.http.routers.proxy-maison.rule=Host(`votre-domaine-public.com`)"
+      - "traefik.http.routers.proxy-maison.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.proxy-maison.entrypoints=websecure"
+      - "traefik.http.routers.proxy-maison.tls.certresolver=le"
+      - "traefik.http.services.proxy-maison.loadbalancer.server.port=8000"
     deploy:
       resources:
         limits:
@@ -127,3 +172,5 @@ services:
 
 volumes:
   pgdata:
+  pgadmin-data:
+  proxy-data:

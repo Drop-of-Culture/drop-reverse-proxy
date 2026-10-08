@@ -17,5 +17,7 @@ RUN apt-get update \
     && useradd --system --uid 10001 --home /app app
 WORKDIR /app
 COPY --from=builder /usr/local/bin/drop-reverse-proxy /usr/local/bin/
+# owned by app so the data volume mounted here is writable (imports untar next to data/import)
+RUN mkdir -p /app/data/import && chown -R app:app /app/data
 USER app
 ENTRYPOINT ["drop-reverse-proxy"]

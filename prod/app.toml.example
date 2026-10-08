@@ -1,0 +1,26 @@
+# Copy to prod/app.toml, mounted at /app/app.toml in both proxy and admin containers.
+
+# where the drop files (playlists, segments) are served from
+redirect_uri = 'https://files.example.com'
+# 0.0.0.0 so Traefik can reach the proxy from its container
+bind_addr = '0.0.0.0:8000'
+max_attempts = 10
+tags = []
+import_path = "./data/import"
+
+[db_conf]
+db_host = "postgres"
+db_port = 5432
+db_name = ""
+db_user = ""
+# same as POSTGRES_PASSWORD in prod/.env
+db_password = ""
+db_pool_size = 10
+db_timeout = 10000
+db_schema = "dropofculture"
+
+[admin_conf]
+# loopback only: admin runs in oauth2-proxy's network namespace
+bind_addr = '127.0.0.1:8081'
+# origin of the admin pages as seen by the browser
+allowed_origin = 'https://admin.example.com'
