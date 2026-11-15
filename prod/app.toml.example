@@ -5,6 +5,10 @@ redirect_uri = 'http://apache'
 # 0.0.0.0 so Traefik can reach the proxy from its container
 bind_addr = '0.0.0.0:8000'
 max_attempts = 10
+# Traefik's address: the client IP for bans is then read from its X-Forwarded-For.
+# Docker networks get their subnets from these private ranges. Without this setting,
+# every client has Traefik's IP and one ban would block everyone.
+trusted_proxies = ["172.16.0.0/12", "192.168.0.0/16", "10.0.0.0/8"]
 tags = []
 import_path = "./data/import"
 # imported drops are written here (the drops volume, served by apache under /tag)

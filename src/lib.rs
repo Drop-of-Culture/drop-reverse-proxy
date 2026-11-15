@@ -5,6 +5,7 @@ use crate::repository::token::Token;
 use crate::repository::{Repo, RepoByDropId, RepoByName, RepoByToken, RepositoryError};
 use crate::service::DropServiceT;
 use crate::service::drop::DropService;
+use crate::client_ip::{ClientIp, IpNet};
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderValue, StatusCode};
@@ -39,6 +40,7 @@ pub mod repository;
 pub mod service;
 pub mod config;
 pub mod admin;
+pub mod client_ip;
 
 /// Prints `tracing` events to stdout. The level is set with `RUST_LOG`
 /// (e.g. `RUST_LOG=debug`), defaults to info for the app and warn for sqlx.
@@ -137,7 +139,7 @@ pub struct AppState {
 
 async fn tag(
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     Path(tag): Path<String>,
 ) -> Result<Response, AppError> {
     if let Some(tag_extracted) = extract_tag_from_path(tag.as_str()) {
@@ -180,7 +182,7 @@ async fn tag(
                 }
             },
             Err(_) => {
-                increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+                increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
                 Err(AppError::TagNotFound)
             },
         }
@@ -338,28 +340,28 @@ pub fn look_for_drop_files_at_path(path: &std::path::Path) -> Vec<String> {
 // Route guard for /tag that validates the requested tag is allowed
 async fn tag_guard(
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     req: Request,
     next: Next
 ) -> Response {
     // check if IP is banned
-    if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts).await {
-        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+    if !check_ip(client_ip, &state.ip_repo, state.conf.max_attempts).await {
+        increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
         return AppError::Unauthorized.into_response();
     }
     // check if tag exists
     let path = req.uri().path();
     if let Some(tag) = extract_tag_from_path(path) {
         if check_tag(tag.as_str(), state.tag_repo).await.is_ok() {
-                let _ = state.ip_repo.save_or_update(&connect_info.ip(), 0).await;
+                let _ = state.ip_repo.save_or_update(&client_ip, 0).await;
                 tracing::debug!(tag, "tag found in repo");
                 return next.run(req).await.into_response();
         } else {
-            tracing::warn!(tag, ip = %connect_info.ip(), "tag not found in repo");
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await
+            tracing::warn!(tag, ip = %client_ip, "tag not found in repo");
+            increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await
         }
     }
-    tracing::warn!(path = req.uri().path(), ip = %connect_info.ip(), "tag not found in path");
+    tracing::warn!(path = req.uri().path(), ip = %client_ip, "tag not found in path");
     AppError::TagNotFound.into_response()
 }
 
@@ -384,12 +386,12 @@ async fn increment_ip_nb_bad_attempts(ip_addr: &IpAddr, ip_repo: &Arc<repository
 // as a request extension (`Extension<Drop>`)
 async fn token_guard(
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     mut req: Request,
     next: Next
 ) -> Response {
-    if !check_ip(connect_info.ip(), &state.ip_repo, state.conf.max_attempts).await {
-        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+    if !check_ip(client_ip, &state.ip_repo, state.conf.max_attempts).await {
+        increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
         return AppError::Unauthorized.into_response();
     }
     if let Some(header_token) = req.headers().get(TOKEN_NAME)
@@ -399,7 +401,7 @@ async fn token_guard(
         req.extensions_mut().insert(drop);
         return next.run(req).await;
     }
-    increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+    increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
     AppError::Unauthorized.into_response()
 }
 
@@ -430,7 +432,7 @@ fn extract_tag_from_path(uri_path: &str) -> Option<String> {
 
 async fn play(
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
     let uri_new = format!("{}/tag/{}/playlist.m3u8", &state.conf.redirect_uri, drop.dir());
@@ -440,7 +442,7 @@ async fn play(
             Ok(resp.bytes().await.unwrap().into_response())
         },
         Err(_) => {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+            increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
             Err(AppError::TagNotFound)
         },
     }
@@ -449,7 +451,7 @@ async fn play(
 async fn track(
     Path(track_number): Path<u8>,
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
     let uri_new = format!("{}/tag/{}/playlist_{}.m3u8", &state.conf.redirect_uri, drop.dir(), track_number);
@@ -459,7 +461,7 @@ async fn track(
             Ok(resp.bytes().await.unwrap().into_response())
         },
         Err(_) => {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+            increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
             Err(AppError::TagNotFound)
         },
     }
@@ -468,15 +470,15 @@ async fn track(
 async fn track_part(
     Path(track_part): Path<String>,
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
-    file(State(state), ConnectInfo(connect_info), Path(track_part), Extension(drop)).await
+    file(State(state), ClientIp(client_ip), Path(track_part), Extension(drop)).await
 }
 
 async fn file(
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     Path(path): Path<String>,
     Extension(drop): Extension<Drop>,
 ) -> Result<Response, AppError> {
@@ -490,7 +492,7 @@ async fn file(
             Ok(resp.bytes().await.unwrap().into_response().into_body().into_response())
         },
         Err(_) => {
-            increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+            increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
             Err(AppError::TagNotFound)
         },
     }
@@ -498,7 +500,7 @@ async fn file(
 
 async fn playlist(
     State(state): State<AppState>,
-    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
+    ClientIp(client_ip): ClientIp,
     Extension(drop): Extension<Drop>,
 ) -> Response {
     let uri_new = format!("{}/tag/{}/playlist.toml", &state.conf.redirect_uri, drop.dir());
@@ -509,7 +511,7 @@ async fn playlist(
         && let Ok(playlist_data) = PlaylistData::create_from_toml_text(text.as_str()) {
         Json(playlist_data).into_response()
     } else {
-        increment_ip_nb_bad_attempts(&connect_info.ip(), &state.ip_repo).await;
+        increment_ip_nb_bad_attempts(&client_ip, &state.ip_repo).await;
         AppError::PlaylistNotFound.into_response()
     }
 }
@@ -523,6 +525,10 @@ pub struct Conf {
     import_path: String,
     db_conf: Option<DbConf>,
     web_server_path: Option<String>,
+    /// Proxies (IPs or CIDRs) whose X-Forwarded-For is trusted for the client IP.
+    #[serde(default)]
+    #[new(default)]
+    trusted_proxies: Vec<IpNet>,
 }
 
 impl Conf {
@@ -548,6 +554,8 @@ impl Conf {
     pub fn db_conf(&self) -> Option<&DbConf> {
         self.db_conf.as_ref()
     }
+
+    pub fn trusted_proxies(&self) -> &[IpNet] { &self.trusted_proxies }
 }
 
 pub fn create_conf_from_toml_file(relative_path: &str) -> figment::Result<Conf> {
